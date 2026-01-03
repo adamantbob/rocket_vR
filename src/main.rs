@@ -1,18 +1,21 @@
 #![no_std]
 #![no_main]
 
+use cyw43::Control;
 use cyw43_pio::{PioSpi, RM2_CLOCK_DIVIDER};
-use defmt::*;
+use defmt::{info, panic, unwrap};
 use embassy_executor::Spawner;
+use embassy_futures::join::join;
+use embassy_rp::Peri;
 use embassy_rp::bind_interrupts;
 use embassy_rp::gpio::{Level, Output};
 use embassy_rp::peripherals::{DMA_CH0, PIO0, USB};
 use embassy_rp::pio::{InterruptHandler as PioInterruptHandler, Pio};
 use embassy_rp::usb::{Driver, Instance, InterruptHandler as USBInterruptHandler};
+use embassy_time::{Duration, Timer};
 use embassy_usb::class::cdc_acm::{CdcAcmClass, State};
 use embassy_usb::driver::EndpointError;
 use embassy_usb::{Builder, Config};
-use embassy_time::{Duration, Timer};
 use static_cell::StaticCell;
 use {defmt_rtt as _, panic_probe as _};
 
@@ -30,6 +33,7 @@ pub static PICOTOOL_ENTRIES: [embassy_rp::binary_info::EntryAddr; 4] = [
     embassy_rp::binary_info::rp_program_build_attribute!(),
 ];
 
+// Bind Interrupts to their appropriate interrupt handler
 bind_interrupts!(struct Irqs {
     PIO0_IRQ_0 => PioInterruptHandler<PIO0>;
     USBCTRL_IRQ => USBInterruptHandler<USB>;
@@ -82,18 +86,112 @@ async fn main(spawner: Spawner) {
     control
         .set_power_management(cyw43::PowerManagementMode::PowerSave)
         .await;
-        
-    //-----------------    
+
+    //-----------------
     // End CYW43 Setup
     //-----------------
 
+    let (mut class, usb_runner) = setup_usb(p.USB);
+
+    join(core0_loop(control), join(usb_runner, core0_REPL(&mut class))).await;
+}
+
+async fn core0_loop<'a>(mut control: Control<'a>) -> ! {
     let delay = Duration::from_millis(250);
     loop {
-        info!("led on!");
+        log::info!("led on!");
         control.gpio_set(0, true).await;
         Timer::after(delay).await;
-        info!("led off!");
+        log::info!("led off!");
         control.gpio_set(0, false).await;
         Timer::after(delay).await;
+    }
+}
+
+async fn core0_REPL<'d, T: Instance + 'd>(serial: &mut CdcAcmClass<'d, Driver<'d, T>>) -> ! {
+    loop {
+        serial.wait_connection().await;
+        log::info!("Connected");
+        let _ = echo(serial).await;
+        log::info!("Disconnected");
+    }
+}
+
+async fn echo<'d, T: Instance + 'd>(class: &mut CdcAcmClass<'d, Driver<'d, T>>) -> Result<(), Disconnected> {
+    let mut buf = [0; 64];
+    loop {
+        let n = class.read_packet(&mut buf).await?;
+        let data = &buf[..n];
+        info!("data: {:x}", data);
+        class.write_packet(data).await?;
+    }
+}
+
+// Return a future that setup the USB Peripheral for Logging and a interactive shell
+fn setup_usb(
+    usb: Peri<'static, USB>,
+) -> (
+    CdcAcmClass<'static, Driver<'static, USB>>,
+    impl core::future::Future<Output = ()>,
+) {
+    let usb_driver = Driver::new(usb, Irqs);
+
+    // Create embassy-usb Config
+    let mut config = Config::new(0xc0de, 0xcafe);
+    config.manufacturer = Some("Embassy");
+    config.product = Some("USB-serial example");
+    config.serial_number = Some("12345678");
+    config.max_power = 100;
+    config.max_packet_size_0 = 64;
+
+    // Create embassy-usb DeviceBuilder using the driver and config.
+    // It needs some buffers for building the descriptors.
+    static CONFIG_DESCRIPTOR: StaticCell<[u8; 256]> = StaticCell::new();
+    static BOS_DESCRIPTOR: StaticCell<[u8; 256]> = StaticCell::new();
+    static CONTROL_BUF: StaticCell<[u8; 64]> = StaticCell::new();
+
+    let mut builder = Builder::new(
+        usb_driver,
+        config,
+        CONFIG_DESCRIPTOR.init([0; 256]),
+        BOS_DESCRIPTOR.init([0; 256]),
+        &mut [], // no msos descriptors
+        CONTROL_BUF.init([0; 64]),
+    );
+
+    // Create classes on the builder.
+    static STATE: StaticCell<State> = StaticCell::new();
+    let class = CdcAcmClass::new(&mut builder, STATE.init(State::new()), 64);
+
+    // Create a class for the logger
+    static LOGGER_STATE: StaticCell<State> = StaticCell::new();
+    let logger_class = CdcAcmClass::new(&mut builder, LOGGER_STATE.init(State::new()), 64);
+
+    // Creates the logger and returns the logger future
+    // Note: You'll need to use log::info! afterwards instead of info! for this to work (this also applies to all the other log::* macros)
+    let log_fut = embassy_usb_logger::with_class!(1024, log::LevelFilter::Info, logger_class);
+
+    // Build the builder.
+    static DEVICE: StaticCell<embassy_usb::UsbDevice<'static, Driver<'static, USB>>> =
+        StaticCell::new();
+    let usb = DEVICE.init(builder.build());
+
+    // Run the USB device.
+    let usb_fut = usb.run();
+
+    // Return the class and a future that runs everything concurrently.
+    (class, async move {
+        join(usb_fut, log_fut).await;
+    })
+}
+
+struct Disconnected {}
+
+impl From<EndpointError> for Disconnected {
+    fn from(val: EndpointError) -> Self {
+        match val {
+            EndpointError::BufferOverflow => panic!("Buffer overflow"),
+            EndpointError::Disabled => Disconnected {},
+        }
     }
 }
