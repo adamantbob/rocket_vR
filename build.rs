@@ -13,4 +13,8 @@ fn main() {
     // project changes. By specifying `memory.x` here, we ensure the build
     // script is only re-run when `memory.x` itself changes.
     println!("cargo:rerun-if-changed=memory.x");
+
+    println!("cargo:rustc-link-arg=-Tlink.x");
+    println!("cargo:rustc-link-arg=-Tdefmt.x");
+    println!("cargo:rustc-link-arg=--nmagic");
 }

@@ -6,6 +6,7 @@ use cyw43_pio::{PioSpi, RM2_CLOCK_DIVIDER};
 use defmt::unwrap;
 use embassy_executor::Spawner;
 use embassy_futures::join::join;
+use embassy_rp::Peripherals;
 use embassy_rp::bind_interrupts;
 use embassy_rp::gpio::{Level, Output};
 use embassy_rp::peripherals::{DMA_CH0, PIO0, USB};
@@ -14,10 +15,33 @@ use embassy_rp::usb::{Driver, Instance, InterruptHandler as USBInterruptHandler}
 use embassy_time::{Duration, Timer};
 use embassy_usb::class::cdc_acm::CdcAcmClass;
 use heapless::Vec;
+use portable_atomic::{AtomicU64, Ordering};
 use static_cell::StaticCell;
 use {defmt_rtt as _, panic_probe as _};
 
 mod usb;
+
+static IDLE_TICKS: AtomicU64 = AtomicU64::new(0);
+
+#[embassy_executor::task]
+async fn stats_task() {
+    let mut last_idle = 0;
+    let mut last_time = embassy_time::Instant::now();
+    loop {
+        embassy_time::Timer::after(Duration::from_secs(1)).await;
+        let now = embassy_time::Instant::now();
+        let idle = IDLE_TICKS.load(Ordering::Relaxed);
+
+        let delta_idle = idle - last_idle;
+        let delta_time = (now - last_time).as_ticks();
+
+        let usage = 100.0 * (1.0 - (delta_idle as f32 / delta_time as f32));
+        log::info!("CPU Usage: {}%", usage);
+
+        last_idle = idle;
+        last_time = now;
+    }
+}
 
 // Program metadata for `picotool info`.
 // This isn't needed, but it's recommended to have these minimal entries.
@@ -51,11 +75,31 @@ async fn cyw43_task(
     runner.run().await
 }
 
-#[embassy_executor::main]
-async fn main(spawner: Spawner) {
+#[cortex_m_rt::entry]
+fn main() -> ! {
     let p = embassy_rp::init(Default::default());
 
-    // CYW43 Wifi Chip Setup (Break this into it's own function?)
+    static EXECUTOR_DATA: StaticCell<embassy_executor::raw::Executor> = StaticCell::new();
+    let executor = EXECUTOR_DATA.init(embassy_executor::raw::Executor::new(core::ptr::null_mut()));
+    let spawner = executor.spawner();
+
+    spawner.spawn(unwrap!(async_main(spawner, p)));
+    spawner.spawn(unwrap!(stats_task()));
+
+    loop {
+        unsafe {
+            executor.poll();
+        }
+        let start = embassy_time::Instant::now();
+        cortex_m::asm::wfe();
+        let end = embassy_time::Instant::now();
+        IDLE_TICKS.fetch_add((end - start).as_ticks(), Ordering::Relaxed);
+    }
+}
+
+#[embassy_executor::task]
+async fn async_main(spawner: Spawner, p: Peripherals) {
+    // CYW43 Wifi Chip Setup
     // Firmware files are expected in the 'firmware' directory at the project root.
     let fw = include_bytes!("../firmware/cyw43-firmware/43439A0.bin");
     let clm = include_bytes!("../firmware/cyw43-firmware/43439A0_clm.bin");
