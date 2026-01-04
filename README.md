@@ -62,7 +62,6 @@ Target is application without probe-rs and SWD debuggers. It should print debug 
 ## To-Do (Unprioritized)
 
 - Have 'cargo build' generate the uf2 file for manually loading onto the Pi
-- Enable the USB Logger
 - Enable the USB REPL
 - Enable the multi-core
 - Move the USB Logger over to Core 1

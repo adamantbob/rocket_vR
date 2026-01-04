@@ -3,21 +3,21 @@
 
 use cyw43::Control;
 use cyw43_pio::{PioSpi, RM2_CLOCK_DIVIDER};
-use defmt::{info, panic, unwrap};
+use defmt::unwrap;
 use embassy_executor::Spawner;
 use embassy_futures::join::join;
-use embassy_rp::Peri;
 use embassy_rp::bind_interrupts;
 use embassy_rp::gpio::{Level, Output};
 use embassy_rp::peripherals::{DMA_CH0, PIO0, USB};
 use embassy_rp::pio::{InterruptHandler as PioInterruptHandler, Pio};
 use embassy_rp::usb::{Driver, Instance, InterruptHandler as USBInterruptHandler};
 use embassy_time::{Duration, Timer};
-use embassy_usb::class::cdc_acm::{CdcAcmClass, State};
-use embassy_usb::driver::EndpointError;
-use embassy_usb::{Builder, Config};
+use embassy_usb::class::cdc_acm::CdcAcmClass;
+use heapless::Vec;
 use static_cell::StaticCell;
 use {defmt_rtt as _, panic_probe as _};
+
+mod usb;
 
 // Program metadata for `picotool info`.
 // This isn't needed, but it's recommended to have these minimal entries.
@@ -34,7 +34,7 @@ pub static PICOTOOL_ENTRIES: [embassy_rp::binary_info::EntryAddr; 4] = [
 ];
 
 // Bind Interrupts to their appropriate interrupt handler
-bind_interrupts!(struct Irqs {
+bind_interrupts!(pub struct Irqs {
     PIO0_IRQ_0 => PioInterruptHandler<PIO0>;
     USBCTRL_IRQ => USBInterruptHandler<USB>;
 });
@@ -91,107 +91,70 @@ async fn main(spawner: Spawner) {
     // End CYW43 Setup
     //-----------------
 
-    let (mut class, usb_runner) = setup_usb(p.USB);
+    let (mut class, usb_runner) = usb::setup_usb(p.USB);
 
-    join(core0_loop(control), join(usb_runner, core0_REPL(&mut class))).await;
+    join(
+        core0_loop(control),
+        join(usb_runner, core0_repl(&mut class)),
+    )
+    .await;
 }
 
 async fn core0_loop<'a>(mut control: Control<'a>) -> ! {
-    let delay = Duration::from_millis(250);
+    let short_delay = Duration::from_millis(100);
+    let long_delay = Duration::from_millis(900);
     loop {
-        log::info!("led on!");
         control.gpio_set(0, true).await;
-        Timer::after(delay).await;
-        log::info!("led off!");
+        Timer::after(short_delay).await;
         control.gpio_set(0, false).await;
-        Timer::after(delay).await;
+        Timer::after(long_delay).await;
     }
 }
 
-async fn core0_REPL<'d, T: Instance + 'd>(serial: &mut CdcAcmClass<'d, Driver<'d, T>>) -> ! {
+async fn core0_repl<'d, T: Instance + 'd>(serial: &mut CdcAcmClass<'d, Driver<'d, T>>) -> ! {
     loop {
         serial.wait_connection().await;
-        log::info!("Connected");
-        let _ = echo(serial).await;
-        log::info!("Disconnected");
+        log::info!("Command REPL Connected");
+        let _ = run_repl(serial).await;
+        log::info!("Command REPL Disconnected");
     }
 }
 
-async fn echo<'d, T: Instance + 'd>(class: &mut CdcAcmClass<'d, Driver<'d, T>>) -> Result<(), Disconnected> {
-    let mut buf = [0; 64];
+// Run the Command REPL.
+// Returns when the connection is lost.
+// By separating the inner logic out, the Disconnected Error can be handled in the main loop.
+async fn run_repl<'d, T: Instance + 'd>(
+    class: &mut CdcAcmClass<'d, Driver<'d, T>>,
+) -> Result<(), usb::Disconnected> {
+    let mut rx_buf = [0; 64];
+    let mut command_buf = Vec::<u8, 64>::new();
+    const BACKSPACE: u8 = 0x08; // \b
     loop {
-        let n = class.read_packet(&mut buf).await?;
-        let data = &buf[..n];
-        info!("data: {:x}", data);
-        class.write_packet(data).await?;
-    }
-}
-
-// Return a future that setup the USB Peripheral for Logging and a interactive shell
-fn setup_usb(
-    usb: Peri<'static, USB>,
-) -> (
-    CdcAcmClass<'static, Driver<'static, USB>>,
-    impl core::future::Future<Output = ()>,
-) {
-    let usb_driver = Driver::new(usb, Irqs);
-
-    // Create embassy-usb Config
-    let mut config = Config::new(0xc0de, 0xcafe);
-    config.manufacturer = Some("Embassy");
-    config.product = Some("USB-serial example");
-    config.serial_number = Some("12345678");
-    config.max_power = 100;
-    config.max_packet_size_0 = 64;
-
-    // Create embassy-usb DeviceBuilder using the driver and config.
-    // It needs some buffers for building the descriptors.
-    static CONFIG_DESCRIPTOR: StaticCell<[u8; 256]> = StaticCell::new();
-    static BOS_DESCRIPTOR: StaticCell<[u8; 256]> = StaticCell::new();
-    static CONTROL_BUF: StaticCell<[u8; 64]> = StaticCell::new();
-
-    let mut builder = Builder::new(
-        usb_driver,
-        config,
-        CONFIG_DESCRIPTOR.init([0; 256]),
-        BOS_DESCRIPTOR.init([0; 256]),
-        &mut [], // no msos descriptors
-        CONTROL_BUF.init([0; 64]),
-    );
-
-    // Create classes on the builder.
-    static STATE: StaticCell<State> = StaticCell::new();
-    let class = CdcAcmClass::new(&mut builder, STATE.init(State::new()), 64);
-
-    // Create a class for the logger
-    static LOGGER_STATE: StaticCell<State> = StaticCell::new();
-    let logger_class = CdcAcmClass::new(&mut builder, LOGGER_STATE.init(State::new()), 64);
-
-    // Creates the logger and returns the logger future
-    // Note: You'll need to use log::info! afterwards instead of info! for this to work (this also applies to all the other log::* macros)
-    let log_fut = embassy_usb_logger::with_class!(1024, log::LevelFilter::Info, logger_class);
-
-    // Build the builder.
-    static DEVICE: StaticCell<embassy_usb::UsbDevice<'static, Driver<'static, USB>>> =
-        StaticCell::new();
-    let usb = DEVICE.init(builder.build());
-
-    // Run the USB device.
-    let usb_fut = usb.run();
-
-    // Return the class and a future that runs everything concurrently.
-    (class, async move {
-        join(usb_fut, log_fut).await;
-    })
-}
-
-struct Disconnected {}
-
-impl From<EndpointError> for Disconnected {
-    fn from(val: EndpointError) -> Self {
-        match val {
-            EndpointError::BufferOverflow => panic!("Buffer overflow"),
-            EndpointError::Disabled => Disconnected {},
+        let n = class.read_packet(&mut rx_buf).await?;
+        // if the buffer contains a newline or a return, we have a command
+        if rx_buf[..n].iter().any(|&b| b == b'\n' || b == b'\r') {
+            if let Ok(s) = core::str::from_utf8(command_buf.as_slice()) {
+                log::info!("command: {}", s);
+            } else {
+                log::info!("command (raw): {:?}", command_buf);
+            }
+            // echo the command back to the client
+            class.write_packet(b"\r\n").await?;
+            class.write_packet(command_buf.as_slice()).await?;
+            class.write_packet(b" received\r\n").await?;
+            command_buf.clear();
+        // if a backspace is received, remove the last character.
+        // Note: This is intended to be used with a user terminal which sends one character at a time.
+        // If somehow multiple backspaces are received, it will remove only a single character.
+        } else if rx_buf[..n].contains(&BACKSPACE) {
+            command_buf.pop();
+        // if the buffer is full, clear it
+        } else if command_buf.extend_from_slice(&rx_buf[..n]).is_err() {
+            log::error!("command_buf overflow");
+            class.write_packet(b"command_buf overflow\n\r").await?;
+            command_buf.clear();
         }
+        // echo the received data back to the client (this is so it appears on the terminal)
+        class.write_packet(&rx_buf[..n]).await?;
     }
 }
