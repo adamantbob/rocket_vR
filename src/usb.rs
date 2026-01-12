@@ -18,7 +18,28 @@ impl From<EndpointError> for Disconnected {
     }
 }
 
-// Return a future that setup the USB Peripheral for Logging and a interactive shell
+/// Approximate memory cost (in bytes) of adding a CDC ACM class instance.
+const CDC_ACM_COST: usize = 66;
+
+/// Conservative estimate for base configuration and string descriptors.
+const BASE_DESCRIPTOR_COST: usize = 64;
+
+/// Total required buffer size for the configuration descriptor based on active classes.
+const REQUIRED_CONFIG_DESC_SIZE: usize = BASE_DESCRIPTOR_COST + (CDC_ACM_COST * 2);
+
+const CONFIG_DESCRIPTOR_BUF_SIZE: usize = 256;
+const BOS_DESCRIPTOR_BUF_SIZE: usize = 256;
+const CONTROL_BUF_SIZE: usize = 64;
+
+// Compile-time assertion to prevent runtime panics if descriptor size exceeds buffer.
+const _: () = assert!(
+    REQUIRED_CONFIG_DESC_SIZE <= CONFIG_DESCRIPTOR_BUF_SIZE,
+    "USB CONFIG_DESCRIPTOR buffer is too small for the requested classes!"
+);
+
+/// Initializes the USB peripheral and sets up a serial class for the REPL and a logger class.
+///
+/// Returns a tuple containing the REPL serial class and a future that runs the USB stack.
 pub fn setup_usb(
     usb: Peri<'static, USB>,
 ) -> (
@@ -37,17 +58,17 @@ pub fn setup_usb(
 
     // Create embassy-usb DeviceBuilder using the driver and config.
     // It needs some buffers for building the descriptors.
-    static CONFIG_DESCRIPTOR: StaticCell<[u8; 256]> = StaticCell::new();
-    static BOS_DESCRIPTOR: StaticCell<[u8; 256]> = StaticCell::new();
-    static CONTROL_BUF: StaticCell<[u8; 64]> = StaticCell::new();
+    static CONFIG_DESCRIPTOR: StaticCell<[u8; CONFIG_DESCRIPTOR_BUF_SIZE]> = StaticCell::new();
+    static BOS_DESCRIPTOR: StaticCell<[u8; BOS_DESCRIPTOR_BUF_SIZE]> = StaticCell::new();
+    static CONTROL_BUF: StaticCell<[u8; CONTROL_BUF_SIZE]> = StaticCell::new();
 
     let mut builder = Builder::new(
         usb_driver,
         config,
-        CONFIG_DESCRIPTOR.init([0; 256]),
-        BOS_DESCRIPTOR.init([0; 256]),
+        CONFIG_DESCRIPTOR.init([0; CONFIG_DESCRIPTOR_BUF_SIZE]),
+        BOS_DESCRIPTOR.init([0; BOS_DESCRIPTOR_BUF_SIZE]),
         &mut [], // no msos descriptors
-        CONTROL_BUF.init([0; 64]),
+        CONTROL_BUF.init([0; CONTROL_BUF_SIZE]),
     );
 
     // Create classes on the builder.

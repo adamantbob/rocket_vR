@@ -2,13 +2,16 @@
 name = "rocket_vR"
 version = "0.1.0"
 edition = "2024"
+default-run = "rocket_vR"
+
+[features]
+verbose-utilization = []
 
 [dependencies]
 embassy-embedded-hal = { git = "https://github.com/embassy-rs/embassy", features = [
     "defmt",
 ] }
 embassy-executor = { git = "https://github.com/embassy-rs/embassy", features = [
-    "arch-cortex-m",
     "executor-thread",
     "defmt",
 ] }
@@ -101,3 +104,7 @@ opt-level = 'z'
 debug = 2
 lto = true
 opt-level = 'z'
+
+[[bin]]
+name = "rocket_vR"
+path = "src/main.rs"
