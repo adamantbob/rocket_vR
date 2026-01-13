@@ -48,3 +48,45 @@ macro_rules! assign_resources {
         )*
     };
 }
+// A set of macros to handle logging for both defmt and log.
+// Log to both in order to enable in the field debugging,
+// Also keeping the testing version as close to the release as possible.
+#[macro_export]
+macro_rules! info {
+    ($($arg:tt)*) => {
+        ::defmt::info!($($arg)*);
+        ::log::info!($($arg)*);
+    };
+}
+
+#[macro_export]
+macro_rules! warn {
+    ($($arg:tt)*) => {
+        ::defmt::warn!($($arg)*);
+        ::log::warn!($($arg)*);
+    };
+}
+
+#[macro_export]
+macro_rules! error {
+    ($($arg:tt)*) => {
+        ::defmt::error!($($arg)*);
+        ::log::error!($($arg)*);
+    };
+}
+
+#[macro_export]
+macro_rules! debug {
+    ($($arg:tt)*) => {
+        ::defmt::debug!($($arg)*);
+        ::log::debug!($($arg)*);
+    };
+}
+
+#[macro_export]
+macro_rules! trace {
+    ($($arg:tt)*) => {
+        ::defmt::trace!($($arg)*);
+        ::log::trace!($($arg)*);
+    };
+}

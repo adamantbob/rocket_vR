@@ -1,3 +1,4 @@
+use crate::{info, warn};
 use core::future::Future;
 use core::pin::Pin;
 use core::task::{Context, Poll};
@@ -6,6 +7,20 @@ use portable_atomic::Ordering;
 use {defmt_rtt as _, panic_probe as _};
 
 use crate::instrumented_executor;
+
+struct Percent(f32);
+
+impl defmt::Format for Percent {
+    fn format(&self, fmt: defmt::Formatter) {
+        defmt::write!(fmt, "{}.{}%", self.0 as u32, ((self.0 * 10.0) as u32) % 10)
+    }
+}
+
+impl core::fmt::Display for Percent {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        write!(f, "{}.{}%", self.0 as u32, ((self.0 * 10.0) as u32) % 10)
+    }
+}
 
 // Utilization Tracking
 // ===================
@@ -109,9 +124,9 @@ pub async fn stats_task(names: &'static [&'static str], stats_id: TaskId) {
             // This ensures that either constant reporting or threshold logic is compiled in.
             #[cfg(feature = "verbose-utilization")]
             {
-                log::info!("--- CPU Utilization: {:3.1}% ({}/s) ---", usage, polls);
+                info!("--- CPU Utilization: {} ({}/s) ---", Percent(usage), polls);
                 for i in 0..task_count {
-                    log::info!("  {:6}: {:3.1}%", names[i], task_usages[i]);
+                    info!("  {}: {}", names[i], Percent(task_usages[i]));
                 }
             }
             #[cfg(not(feature = "verbose-utilization"))]
@@ -123,10 +138,10 @@ pub async fn stats_task(names: &'static [&'static str], stats_id: TaskId) {
                         "WARNING"
                     };
 
-                    log::warn!(
-                        "--- CPU Utilization {}: {:3.1}% ({}/s) ---",
+                    warn!(
+                        "--- CPU Utilization {}: {} ({}/s) ---",
                         level,
-                        usage,
+                        Percent(usage),
                         polls
                     );
 
@@ -134,7 +149,7 @@ pub async fn stats_task(names: &'static [&'static str], stats_id: TaskId) {
                         if task_usages[i] > TASK_USAGE_THRESHOLD
                             || usage > TOTAL_USAGE_WARNING_THRESHOLD
                         {
-                            log::info!("  {:6}: {:3.1}%", names[i], task_usages[i]);
+                            info!("  {}: {}", names[i], Percent(task_usages[i]));
                         }
                     }
                 }

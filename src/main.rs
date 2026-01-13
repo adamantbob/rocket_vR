@@ -1,6 +1,17 @@
 #![no_std]
 #![no_main]
 
+#[cfg(not(any(feature = "rp2040", feature = "rp2350")))]
+compile_error!(
+    "Please use a chip alias:\n  - For Pico (RP2040):   cargo run-pico\n  - For Pico 2 (RP2350): cargo run-pico2"
+);
+
+#[cfg(all(feature = "rp2040", not(target_arch = "arm")))]
+compile_error!("Mismatched target for RP2040! Please use 'cargo run-pico'");
+
+#[cfg(all(feature = "rp2350", not(target_arch = "arm")))]
+compile_error!("Mismatched target for RP2350! Please use 'cargo run-pico2'");
+
 use cyw43::Control;
 use cyw43_pio::{PioSpi, RM2_CLOCK_DIVIDER};
 use defmt::unwrap;
@@ -25,16 +36,24 @@ use utilization::{TrackedExt, stats_task};
 
 define_utilization_tasks!(Stats, Wifi, Usb, Blinky, Repl);
 
+#[cfg(feature = "rp2350")]
+const DESCRIPTION: embassy_rp::binary_info::EntryAddr = embassy_rp::binary_info::rp_program_description!(
+    c"This example tests the RP Pico 2 W's onboard LED, connected to GPIO 0 of the cyw43 \
+    (WiFi chip) via PIO 0 over the SPI bus."
+);
+#[cfg(feature = "rp2040")]
+const DESCRIPTION: embassy_rp::binary_info::EntryAddr = embassy_rp::binary_info::rp_program_description!(
+    c"This example tests the RP Pico W's onboard LED, connected to GPIO 0 of the cyw43 \
+    (WiFi chip) via PIO 0 over the SPI bus."
+);
+
 // Program metadata for `picotool info`.
 // This isn't needed, but it's recommended to have these minimal entries.
 #[unsafe(link_section = ".bi_entries")]
 #[used]
 pub static PICOTOOL_ENTRIES: [embassy_rp::binary_info::EntryAddr; 4] = [
-    embassy_rp::binary_info::rp_program_name!(c"Blinky Example"),
-    embassy_rp::binary_info::rp_program_description!(
-        c"This example tests the RP Pico 2 W's onboard LED, connected to GPIO 0 of the cyw43 \
-        (WiFi chip) via PIO 0 over the SPI bus."
-    ),
+    embassy_rp::binary_info::rp_program_name!(c"Rocket vR"),
+    DESCRIPTION,
     embassy_rp::binary_info::rp_cargo_version!(),
     embassy_rp::binary_info::rp_program_build_attribute!(),
 ];
@@ -63,7 +82,7 @@ async fn cyw43_task(
 //     embassy_usb_logger::run!(1024, log::LevelFilter::Info, driver);
 // }
 
-// useful Stuff 
+// useful Stuff
 // adc example: ticker - execute every x time. Use this for main logging loop
 // let mut ticker = Ticker::every(Duration::from_secs(1));
 
@@ -87,8 +106,6 @@ async fn async_main(spawner: Spawner) {
         PIO_CH0: PIO0,
         DMA_CH0: DMA_CH0,
         USB_BUS: USB,
-        ADC: ADC,
-        CORE_TEMP_SENSOR: ADC_TEMP_SENSOR,
     });
 
     let pwr = Output::new(WIFI_PWR, Level::Low);
@@ -145,9 +162,9 @@ async fn core0_repl<'d, T: Instance + 'd>(serial: &mut CdcAcmClass<'d, Driver<'d
     async move {
         loop {
             serial.wait_connection().await;
-            log::info!("Command REPL Connected");
+            info!("Command REPL Connected");
             let _ = run_repl(serial).await;
-            log::info!("Command REPL Disconnected");
+            info!("Command REPL Disconnected");
         }
     }
     .tracked(Repl)
@@ -172,15 +189,14 @@ async fn run_repl<'d, T: Instance + 'd>(
     const BACKSPACE: u8 = 0x08; // \b
     loop {
         let n = class.read_packet(&mut rx_buf).await?;
-        log::info!("read {} bytes", n);
 
         for &b in &rx_buf[..n] {
             if b == b'\n' || b == b'\r' {
                 if !command_buf.is_empty() {
                     if let Ok(s) = core::str::from_utf8(command_buf.as_slice()) {
-                        log::info!("command: {}", s);
+                        info!("command: {}", s);
                     } else {
-                        log::info!("command (raw): {:?}", command_buf);
+                        info!("command (raw): {:?}", command_buf);
                     }
                     // echo the command back to the client
                     class.write_packet(b"\r\n").await?;
@@ -191,7 +207,7 @@ async fn run_repl<'d, T: Instance + 'd>(
             } else if b == BACKSPACE {
                 command_buf.pop();
             } else if command_buf.extend_from_slice(&[b]).is_err() {
-                log::error!("command_buf overflow");
+                error!("command_buf overflow");
                 class.write_packet(b"command_buf overflow\n\r").await?;
                 command_buf.clear();
             }
@@ -200,5 +216,3 @@ async fn run_repl<'d, T: Instance + 'd>(
         class.write_packet(&rx_buf[..n]).await?;
     }
 }
-
-async fn core_temp<'d>(adc: Peri<'d, ADC>, sensor: Peri<'d, impl AdcPin + 'd>)

@@ -6,6 +6,8 @@ default-run = "rocket_vR"
 
 [features]
 verbose-utilization = []
+rp2040 = ["embassy-rp/rp2040"]
+rp2350 = ["embassy-rp/rp235xa"]
 
 [dependencies]
 embassy-embedded-hal = { git = "https://github.com/embassy-rs/embassy", features = [
@@ -21,7 +23,6 @@ embassy-sync = { git = "https://github.com/embassy-rs/embassy", features = [
 ] }
 embassy-rp = { git = "https://github.com/embassy-rs/embassy", features = [
     "defmt",
-    "rp235xa",
     "time-driver",
     "critical-section-impl",
     "unstable-pac",
@@ -31,9 +32,7 @@ embassy-time = { git = "https://github.com/embassy-rs/embassy", features = [
     "defmt",
     "defmt-timestamp-uptime",
 ] }
-embassy-usb = { git = "https://github.com/embassy-rs/embassy", features = [
-    "defmt",
-] }
+embassy-usb = { git = "https://github.com/embassy-rs/embassy" }
 embassy-net = { git = "https://github.com/embassy-rs/embassy", features = [
     "defmt",
     "icmp",
@@ -49,13 +48,8 @@ embassy-net-wiznet = { git = "https://github.com/embassy-rs/embassy", features =
 ] }
 embassy-futures = { git = "https://github.com/embassy-rs/embassy" }
 embassy-usb-logger = { git = "https://github.com/embassy-rs/embassy" }
-cyw43 = { git = "https://github.com/embassy-rs/embassy", features = [
-    "defmt",
-    "firmware-logs",
-] }
-cyw43-pio = { git = "https://github.com/embassy-rs/embassy", features = [
-    "defmt",
-] }
+cyw43 = { git = "https://github.com/embassy-rs/embassy" }
+cyw43-pio = { git = "https://github.com/embassy-rs/embassy" }
 
 defmt = "1.0.1"
 defmt-rtt = "1.0.0"

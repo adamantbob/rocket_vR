@@ -51,16 +51,19 @@ For offboard sensors, depending on how quickly they can be queried. Each will:
 2. Yeild until there is a response from the sensor.
 3. When data arrives, store that data in a CHANNEL for retrieval by the data collection task.
 4. Yeild until signal from data logger task to seek new data.
-TASK: GPS (10Hz).
-TASK: Accelerometer (100Hz). 
+These are grouped into tasks according to where the sensor is.
+TASK: On-Chip Sensors (Core Temp)
+TASK: I2C Bus 0 - Accelerometer 
+TASK: UART0 - GPS (10Hz).
 
 #### Output (N tasks)
-TASK: LED Blinker
-TASK: Fire the Pyros
+TASK: On-Chip Outputs - Pyros
+TASK: PIO0(wifi) - LED Blinker (This will move to on-chip if using a regular pico)
 
 #### Background tasks
 Run the command REPL (Read Execute )
 USB/900Mhz Logging
+Utilization Monitoring
 
 ## Features
 
@@ -69,41 +72,40 @@ USB/900Mhz Logging
 - **CYW43 Integration**: Controls the onboard LED connected to the WiFi chip via PIO/SPI.
 - **Picotool Metadata**: Includes binary info for use with `picotool info`.
 
+## Chip Support (Pico vs Pico 2)
+
+This firmware supports both the Raspberry Pi Pico (RP2040) and Raspberry Pi Pico 2 (RP2350). You can switch between them using Cargo features and targets.
+
+## Chip Support (Pico vs Pico 2)
+
+This firmware supports both the Raspberry Pi Pico (RP2040) and Raspberry Pi Pico 2 (RP2350). Target selection is simplified via **Cargo Aliases**.
+
+### Building and Running
+
+You no longer need to edit `.cargo/config.toml`. Just use the following commands:
+
+#### Pico 2 (RP2350)
+```powershell
+cargo pico2
+```
+(Or `cargo pico2-build` to just compile)
+
+#### Pico (RP2040)
+```powershell
+cargo pico
+```
+(Or `cargo pico-build` to just compile)
+
 ## Prerequisites
 
 1.  **Rustup**: Download Rust from https://rust-lang.org/learn/get-started/ and run the installer.
-2.  **Rust Toolchain**: Install Rust and the necessary target:
+2.  **Rust Toolchain**: Install the necessary target(s):
     ```bash
-    rustup target add thumbv8m.main-none-eabihf
+    rustup target add thumbv8m.main-none-eabihf # For Pico 2
+    rustup target add thumbv6m-none-eabi        # For Pico
     ```
-3.  **Picotool**: Required for loading the firmware onto the device.
-4.  **Firmware Files**: Ensure `43439A0.bin` and `43439A0_clm.bin` are present in `firmware/cyw43-firmware/` as they are bundled into the binary.
-
-## Project Structure
-
-- `src/main.rs`: Core application logic, including the blink loop and setup.
-- `src/instrumented_executor.rs`: Executor with additional statistics tracking.
-- `src/utilization.rs`: CPU utilization monitoring system.
-- `src/usb.rs`: USB Serial setup and REPL.
-- `memory.x`: Memory layout for the RP2350.
-- `build.rs`: Minimal build script for dependency management and ensuring rebuilds on memory changes.
-- `.cargo/config.toml`: Configures the runner (`picotool`) and necessary linker flags (`-Tlink.x`, `-Tdefmt.x`).
-
-## Building and Running
-
-Connect your Pico 2 in BOOTSEL mode and run:
-
-```powershell
-cargo run
-```
-
-This will build the project and use `picotool` to load and execute it. 
-
-Alternatively, to just build:
-
-```powershell
-cargo build
-```
+3.  **Picotool**: Required for loading the firmware.
+4.  **Firmware Files**: Ensure `43439A0.bin` and `43439A0_clm.bin` are present in `firmware/cyw43-firmware/`.
 
 ## Monitoring
 
