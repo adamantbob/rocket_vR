@@ -12,29 +12,33 @@ compile_error!("Mismatched target for RP2040! Please use 'cargo run-pico'");
 #[cfg(all(feature = "rp2350", not(target_arch = "arm")))]
 compile_error!("Mismatched target for RP2350! Please use 'cargo run-pico2'");
 
+use cortex_m_rt::entry;
 use cyw43::Control;
 use cyw43_pio::{PioSpi, RM2_CLOCK_DIVIDER};
 use defmt::unwrap;
 use embassy_executor::Spawner;
 use embassy_futures::join::join;
-use embassy_rp::bind_interrupts;
 use embassy_rp::gpio::{Level, Output};
+use embassy_rp::interrupt::{InterruptExt, Priority};
 use embassy_rp::peripherals::{DMA_CH0, PIO0, USB};
 use embassy_rp::pio::{InterruptHandler as PioInterruptHandler, Pio};
 use embassy_rp::usb::{Driver, Instance, InterruptHandler as USBInterruptHandler};
-use embassy_time::{Duration, Timer};
+use embassy_rp::{bind_interrupts, interrupt};
+use embassy_time::{Duration, Instant, TICK_HZ, Timer};
 use embassy_usb::class::cdc_acm::CdcAcmClass;
 use heapless::Vec;
 use static_cell::StaticCell;
 use {defmt_rtt as _, panic_probe as _};
 
 mod instrumented_executor;
+use instrumented_executor::{InstrumentedExecutor, InstrumentedInterruptExecutor};
+
 mod macros;
 mod usb;
 mod utilization;
 use utilization::{TrackedExt, stats_task};
 
-define_utilization_tasks!(Stats, Wifi, Usb, Blinky, Repl);
+define_utilization_tasks!(Stats, Wifi, Usb, Blinky, Repl, RunMed);
 
 #[cfg(feature = "rp2350")]
 const DESCRIPTION: embassy_rp::binary_info::EntryAddr = embassy_rp::binary_info::rp_program_description!(
@@ -86,12 +90,8 @@ async fn cyw43_task(
 // adc example: ticker - execute every x time. Use this for main logging loop
 // let mut ticker = Ticker::every(Duration::from_secs(1));
 
-#[embassy_executor::main(
-    entry = "cortex_m_rt::entry",
-    executor = "instrumented_executor::InstrumentedExecutor"
-)]
-async fn async_main(spawner: Spawner) {
-    let p = embassy_rp::init(Default::default());
+#[embassy_executor::task]
+async fn run_low(spawner: Spawner, p: embassy_rp::Peripherals) {
     spawner.spawn(unwrap!(stats_task(TASK_NAMES, Stats)));
 
     // CYW43 Wifi Chip Setup
@@ -215,4 +215,49 @@ async fn run_repl<'d, T: Instance + 'd>(
         // echo the received data back to the client (this is so it appears on the terminal)
         class.write_packet(&rx_buf[..n]).await?;
     }
+}
+
+// Test task for the pre-emption test
+// This is somewhat bad form to block for a long time in an interrupt.
+#[embassy_executor::task]
+async fn run_med() {
+    async move {
+        loop {
+            let start = Instant::now();
+            // info!("    [med] Starting long computation");
+
+            // Spin-wait to simulate a long CPU computation
+            embassy_time::block_for(embassy_time::Duration::from_millis(50)); // ~1 second
+
+            let end = Instant::now();
+            let ms = end.duration_since(start).as_ticks() * 1000 / TICK_HZ;
+            // info!("    [med] done in {} ms", ms);
+
+            Timer::after(Duration::from_millis(900)).await;
+        }
+    }
+    .tracked(RunMed)
+    .await;
+}
+
+static EXECUTOR_HIGH: InstrumentedInterruptExecutor = InstrumentedInterruptExecutor::new();
+static EXECUTOR_LOW: StaticCell<InstrumentedExecutor> = StaticCell::new();
+
+#[interrupt]
+unsafe fn SWI_IRQ_1() {
+    unsafe { EXECUTOR_HIGH.on_interrupt() }
+}
+
+#[entry]
+fn main() -> ! {
+    let p = embassy_rp::init(Default::default());
+    // High-priority executor: SWI_IRQ_1, priority level 2
+    interrupt::SWI_IRQ_1.set_priority(Priority::P2);
+    let spawner = EXECUTOR_HIGH.start(interrupt::SWI_IRQ_1);
+    spawner.spawn(unwrap!(run_med()));
+
+    let executor = EXECUTOR_LOW.init(InstrumentedExecutor::new());
+    executor.run(|spawner| {
+        spawner.spawn(unwrap!(run_low(spawner, p)));
+    });
 }

@@ -15,6 +15,7 @@ embassy-embedded-hal = { git = "https://github.com/embassy-rs/embassy", features
 ] }
 embassy-executor = { git = "https://github.com/embassy-rs/embassy", features = [
     "executor-thread",
+    "executor-interrupt",
     "defmt",
 ] }
 embassy-hal-internal = { git = "https://github.com/embassy-rs/embassy" }

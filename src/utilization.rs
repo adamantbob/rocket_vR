@@ -40,6 +40,8 @@ pub const TASK_USAGE_THRESHOLD: f32 = 10.0;
 pub const TOTAL_USAGE_WARNING_THRESHOLD: f32 = 40.0;
 #[cfg(not(feature = "verbose-utilization"))]
 pub const TOTAL_USAGE_ALARM_THRESHOLD: f32 = 80.0;
+#[cfg(not(feature = "verbose-utilization"))]
+pub const HIGH_PRIORITY_TASK_USAGE_THRESHOLD: f32 = 20.0;
 
 // Silent Profiling: We use raw u32s for task ticks to avoid atomic-induced event spins.
 // Since these are only updated by the executor thread, it's safe from races.
@@ -89,18 +91,34 @@ pub async fn stats_task(names: &'static [&'static str], stats_id: TaskId) {
         let mut last_idle = 0u32;
         let mut last_task_ticks = [0u32; MAX_TASKS];
         let mut last_time = embassy_time::Instant::now();
+        let mut last_interrupt_active = 0u32;
         let task_count = names.len();
 
         loop {
             embassy_time::Timer::after(Duration::from_secs(1)).await;
             let now = embassy_time::Instant::now();
             let idle = instrumented_executor::IDLE_TICKS.load(Ordering::Relaxed);
+            let interrupt_active =
+                instrumented_executor::INTERRUPT_ACTIVE_TICKS.load(Ordering::Relaxed);
 
+            // Time Calculations
             let delta_idle = idle.wrapping_sub(last_idle);
+            let delta_interrupt_active = interrupt_active.wrapping_sub(last_interrupt_active);
             let delta_time = (now - last_time).as_ticks() as u32;
 
-            let usage = 100.0 * (1.0 - (delta_idle as f32 / delta_time as f32));
-            let polls = instrumented_executor::POLL_COUNT.swap(0, Ordering::Relaxed);
+            // CPU Usage Calculations
+            let usage = 100.0
+                * (1.0
+                    - ((delta_idle.wrapping_sub(delta_interrupt_active)) as f32
+                        / delta_time as f32));
+            let interrupt_usage = 100.0 * (delta_interrupt_active as f32 / delta_time as f32);
+            let thread_usage = 100.0 * ((delta_time - delta_idle) as f32 / delta_time as f32);
+
+            // Polls Calculations
+            let thread_polls = instrumented_executor::POLL_COUNT.swap(0, Ordering::Relaxed);
+            let interrupt_polls =
+                instrumented_executor::INTERRUPT_POLL_COUNT.swap(0, Ordering::Relaxed);
+            let total_polls = thread_polls + interrupt_polls;
 
             let mut task_usages = [0.0f32; MAX_TASKS];
             // Conditional state for threshold detection. Only compiled in when
@@ -124,14 +142,31 @@ pub async fn stats_task(names: &'static [&'static str], stats_id: TaskId) {
             // This ensures that either constant reporting or threshold logic is compiled in.
             #[cfg(feature = "verbose-utilization")]
             {
-                info!("--- CPU Utilization: {} ({}/s) ---", Percent(usage), polls);
+                info!(
+                    "--- CPU Utilization: {} ({}/s) ---",
+                    Percent(usage),
+                    total_polls
+                );
+                info!(
+                    "High Priority Task Utilization: {} ({}/s)",
+                    Percent(interrupt_usage),
+                    interrupt_polls
+                );
+                info!(
+                    "Background Task Utilization: {} ({}/s)",
+                    Percent(thread_usage),
+                    thread_polls
+                );
                 for i in 0..task_count {
                     info!("  {}: {}", names[i], Percent(task_usages[i]));
                 }
             }
             #[cfg(not(feature = "verbose-utilization"))]
             {
-                if usage > TOTAL_USAGE_WARNING_THRESHOLD || any_task_exceeded {
+                if usage > TOTAL_USAGE_WARNING_THRESHOLD
+                    || any_task_exceeded
+                    || interrupt_usage > HIGH_PRIORITY_TASK_USAGE_THRESHOLD
+                {
                     let level = if usage > TOTAL_USAGE_ALARM_THRESHOLD {
                         "ALARM"
                     } else {
@@ -142,20 +177,31 @@ pub async fn stats_task(names: &'static [&'static str], stats_id: TaskId) {
                         "--- CPU Utilization {}: {} ({}/s) ---",
                         level,
                         Percent(usage),
-                        polls
+                        total_polls
+                    );
+                    warn!(
+                        "High Priority Task Utilization: {} ({}/s)",
+                        Percent(interrupt_usage),
+                        interrupt_polls
+                    );
+                    warn!(
+                        "Background Task Utilization: {} ({}/s)",
+                        Percent(thread_usage),
+                        thread_polls
                     );
 
                     for i in 0..task_count {
                         if task_usages[i] > TASK_USAGE_THRESHOLD
                             || usage > TOTAL_USAGE_WARNING_THRESHOLD
                         {
-                            info!("  {}: {}", names[i], Percent(task_usages[i]));
+                            warn!("  {}: {}", names[i], Percent(task_usages[i]));
                         }
                     }
                 }
             }
 
             last_idle = idle;
+            last_interrupt_active = interrupt_active;
             last_time = now;
         }
     }
