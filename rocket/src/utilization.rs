@@ -46,6 +46,7 @@ pub const HIGH_PRIORITY_TASK_USAGE_THRESHOLD: f32 = 20.0;
 // Silent Profiling: We use raw u32s for task ticks to avoid atomic-induced event spins.
 // Since these are only updated by the executor thread, it's safe from races.
 static mut TASK_TICKS: [u32; MAX_TASKS] = [0; MAX_TASKS];
+static mut TASK_POLLS: [u32; MAX_TASKS] = [0; MAX_TASKS];
 
 fn get_task_ticks(id: usize) -> u32 {
     unsafe { core::ptr::read_volatile(&TASK_TICKS[id]) }
@@ -57,6 +58,20 @@ fn add_task_ticks(id: usize, delta: u32) {
     }
     unsafe {
         let ptr = &mut TASK_TICKS[id] as *mut u32;
+        core::ptr::write_volatile(ptr, core::ptr::read_volatile(ptr).wrapping_add(delta));
+    }
+}
+
+fn get_task_polls(id: usize) -> u32 {
+    unsafe { core::ptr::read_volatile(&TASK_POLLS[id]) }
+}
+
+fn add_task_polls(id: usize, delta: u32) {
+    if id >= MAX_TASKS {
+        return;
+    }
+    unsafe {
+        let ptr = &mut TASK_POLLS[id] as *mut u32;
         core::ptr::write_volatile(ptr, core::ptr::read_volatile(ptr).wrapping_add(delta));
     }
 }
@@ -73,6 +88,7 @@ impl<F: Future> Future for TrackedFuture<F> {
         let res = unsafe { self.as_mut().map_unchecked_mut(|s| &mut s.inner) }.poll(cx);
         let end = Instant::now().as_ticks() as u32;
         add_task_ticks(self.id.0, end.wrapping_sub(start));
+        add_task_polls(self.id.0, 1);
         res
     }
 }
@@ -90,6 +106,7 @@ pub async fn stats_task(names: &'static [&'static str], stats_id: TaskId) {
     async move {
         let mut last_idle = 0u32;
         let mut last_task_ticks = [0u32; MAX_TASKS];
+        let mut last_task_polls = [0u32; MAX_TASKS];
         let mut last_time = embassy_time::Instant::now();
         let mut last_interrupt_active = 0u32;
         let task_count = names.len();
@@ -106,11 +123,13 @@ pub async fn stats_task(names: &'static [&'static str], stats_id: TaskId) {
             let delta_interrupt_active = interrupt_active.wrapping_sub(last_interrupt_active);
             let delta_time = (now - last_time).as_ticks() as u32;
 
+            info!("Idle: {}", delta_idle);
+            info!("Interrupt Active: {}", delta_interrupt_active);
+            info!("Time: {}", delta_time);
+
             // CPU Usage Calculations
-            let usage = 100.0
-                * (1.0
-                    - ((delta_idle.wrapping_sub(delta_interrupt_active)) as f32
-                        / delta_time as f32));
+            let usage =
+                100.0 * (1.0 - ((delta_idle - delta_interrupt_active) as f32 / delta_time as f32));
             let interrupt_usage = 100.0 * (delta_interrupt_active as f32 / delta_time as f32);
             let thread_usage = 100.0 * ((delta_time - delta_idle) as f32 / delta_time as f32);
 
@@ -126,16 +145,22 @@ pub async fn stats_task(names: &'static [&'static str], stats_id: TaskId) {
             #[cfg(not(feature = "verbose-utilization"))]
             let mut any_task_exceeded = false;
 
+            let mut task_poll_deltas = [0u32; MAX_TASKS];
+
             for i in 0..task_count {
                 let ticks = get_task_ticks(i);
+                let polls = get_task_polls(i);
                 let delta = ticks.wrapping_sub(last_task_ticks[i]);
+                let poll_delta = polls.wrapping_sub(last_task_polls[i]);
                 let task_usage = 100.0 * (delta as f32 / delta_time as f32);
                 task_usages[i] = task_usage;
+                task_poll_deltas[i] = poll_delta;
                 #[cfg(not(feature = "verbose-utilization"))]
                 if task_usage > TASK_USAGE_THRESHOLD {
                     any_task_exceeded = true;
                 }
                 last_task_ticks[i] = ticks;
+                last_task_polls[i] = polls;
             }
 
             // Diagnostic Switch: We use a "selection block" with direct #[cfg] attributes.
@@ -158,7 +183,12 @@ pub async fn stats_task(names: &'static [&'static str], stats_id: TaskId) {
                     thread_polls
                 );
                 for i in 0..task_count {
-                    info!("  {}: {}", names[i], Percent(task_usages[i]));
+                    info!(
+                        "  {}: {} ({}/s)",
+                        names[i],
+                        Percent(task_usages[i]),
+                        task_poll_deltas[i]
+                    );
                 }
             }
             #[cfg(not(feature = "verbose-utilization"))]
@@ -194,7 +224,12 @@ pub async fn stats_task(names: &'static [&'static str], stats_id: TaskId) {
                         if task_usages[i] > TASK_USAGE_THRESHOLD
                             || usage > TOTAL_USAGE_WARNING_THRESHOLD
                         {
-                            warn!("  {}: {}", names[i], Percent(task_usages[i]));
+                            warn!(
+                                "  {}: {} ({}/s)",
+                                names[i],
+                                Percent(task_usages[i]),
+                                task_poll_deltas[i]
+                            );
                         }
                     }
                 }

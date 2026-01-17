@@ -48,7 +48,7 @@ fn __pender(context: *mut ()) {
     let irq = Irq(ctx as u16);
 
     // STIR is faster, but is only available in v7 and higher.
-    #[cfg(not(armv6m))]
+    #[cfg(not(feature = "rp2040"))]
     {
         unsafe {
             let mut nvic: NVIC = core::mem::transmute(());
@@ -56,7 +56,7 @@ fn __pender(context: *mut ()) {
         }
     }
 
-    #[cfg(armv6m)]
+    #[cfg(feature = "rp2040")]
     NVIC::pend(irq);
 }
 

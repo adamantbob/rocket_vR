@@ -13,7 +13,7 @@ compile_error!("Mismatched target for RP2040! Please use 'cargo run-pico'");
 compile_error!("Mismatched target for RP2350! Please use 'cargo run-pico2'");
 
 use cortex_m_rt::entry;
-use cyw43::Control;
+use cyw43::{Control, aligned_bytes};
 use cyw43_pio::{PioSpi, RM2_CLOCK_DIVIDER};
 use defmt::unwrap;
 use embassy_executor::Spawner;
@@ -27,6 +27,7 @@ use embassy_rp::{bind_interrupts, interrupt};
 use embassy_time::{Duration, Instant, TICK_HZ, Timer};
 use embassy_usb::class::cdc_acm::CdcAcmClass;
 use heapless::Vec;
+use proc_macros::tracked_task;
 use static_cell::StaticCell;
 use {defmt_rtt as _, panic_probe as _};
 
@@ -38,7 +39,7 @@ mod usb;
 mod utilization;
 use utilization::{TrackedExt, stats_task};
 
-define_utilization_tasks!(Stats, Wifi, Usb, Blinky, Repl, RunMed);
+define_utilization_tasks!(Stats, Wifi, Usb, Blinky, Repl, RunMed, Main);
 
 #[cfg(feature = "rp2350")]
 const DESCRIPTION: embassy_rp::binary_info::EntryAddr = embassy_rp::binary_info::rp_program_description!(
@@ -90,13 +91,14 @@ async fn cyw43_task(
 // adc example: ticker - execute every x time. Use this for main logging loop
 // let mut ticker = Ticker::every(Duration::from_secs(1));
 
-#[embassy_executor::task]
+#[tracked_task(Main)]
 async fn run_low(spawner: Spawner, p: embassy_rp::Peripherals) {
     spawner.spawn(unwrap!(stats_task(TASK_NAMES, Stats)));
 
     // CYW43 Wifi Chip Setup
-    let fw = include_bytes!("../firmware/cyw43-firmware/43439A0.bin");
-    let clm = include_bytes!("../firmware/cyw43-firmware/43439A0_clm.bin");
+    let fw = aligned_bytes!("../../firmware/cyw43-firmware/43439A0.bin");
+    let clm = aligned_bytes!("../../firmware/cyw43-firmware/43439A0_clm.bin");
+    let nvram = aligned_bytes!("../../firmware/cyw43-firmware/nvram_rp2040.bin");
 
     assign_resources!(p => {
         WIFI_PWR: PIN_23,
@@ -125,10 +127,9 @@ async fn run_low(spawner: Spawner, p: embassy_rp::Peripherals) {
     static STATE: StaticCell<cyw43::State> = StaticCell::new();
 
     let state = STATE.init(cyw43::State::new());
-    let (_net_device, mut control, runner) = cyw43::new(state, pwr, spi, fw).await;
+    let (_net_device, mut control, runner) = cyw43::new(state, pwr, spi, fw, nvram).await;
 
     spawner.spawn(unwrap!(cyw43_task(runner)));
-
     control.init(clm).await;
     control
         .set_power_management(cyw43::PowerManagementMode::PowerSave)
@@ -138,8 +139,9 @@ async fn run_low(spawner: Spawner, p: embassy_rp::Peripherals) {
 
     join(
         core0_loop(control),
-        join(usb_runner.tracked(Usb), core0_repl(&mut class)),
+        join(usb_runner, core0_repl(&mut class)),
     )
+    .tracked(Usb)
     .await;
 }
 
@@ -227,7 +229,7 @@ async fn run_med() {
             // info!("    [med] Starting long computation");
 
             // Spin-wait to simulate a long CPU computation
-            embassy_time::block_for(embassy_time::Duration::from_millis(50)); // ~1 second
+            // embassy_time::block_for(embassy_time::Duration::from_millis(50)); // ~1 second
 
             let end = Instant::now();
             let ms = end.duration_since(start).as_ticks() * 1000 / TICK_HZ;
@@ -237,7 +239,7 @@ async fn run_med() {
         }
     }
     .tracked(RunMed)
-    .await;
+    .await
 }
 
 static EXECUTOR_HIGH: InstrumentedInterruptExecutor = InstrumentedInterruptExecutor::new();
