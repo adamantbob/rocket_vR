@@ -13,15 +13,14 @@ compile_error!("Mismatched target for RP2040! Please use 'cargo run-pico'");
 compile_error!("Mismatched target for RP2350! Please use 'cargo run-pico2'");
 
 use cortex_m_rt::entry;
-use cyw43::{Control, aligned_bytes};
-use cyw43_pio::{PioSpi, RM2_CLOCK_DIVIDER};
+use cyw43::Control;
 use defmt::unwrap;
 use embassy_executor::Spawner;
 use embassy_futures::join::join;
-use embassy_rp::gpio::{Level, Output};
 use embassy_rp::interrupt::{InterruptExt, Priority};
-use embassy_rp::peripherals::{DMA_CH0, PIO0, USB};
-use embassy_rp::pio::{InterruptHandler as PioInterruptHandler, Pio};
+use embassy_rp::peripherals::{DMA_CH0, PIO0, UART0, USB};
+use embassy_rp::pio::InterruptHandler as PioInterruptHandler;
+use embassy_rp::uart::BufferedInterruptHandler;
 use embassy_rp::usb::{Driver, Instance, InterruptHandler as USBInterruptHandler};
 use embassy_rp::{bind_interrupts, interrupt};
 use embassy_time::{Duration, Instant, TICK_HZ, Timer};
@@ -34,12 +33,35 @@ use {defmt_rtt as _, panic_probe as _};
 mod instrumented_executor;
 use instrumented_executor::{InstrumentedExecutor, InstrumentedInterruptExecutor};
 
+mod gps;
 mod macros;
 mod usb;
 mod utilization;
-use utilization::{TrackedExt, stats_task};
+mod wifi;
 
-define_utilization_tasks!(Stats, Wifi, Usb, Blinky, Repl, RunMed, Main);
+use crate::utilization::{TrackedExt, stats_task};
+use crate::wifi::WifiRunner;
+
+define_utilization_tasks!(Stats, Wifi, Usb, Blinky, Repl, RunMed, Main, GPS);
+
+assign_resources! {
+    GpsResources {
+        uart: UART0,
+        tx: PIN_12,
+        rx: PIN_13,
+    }
+    WifiResources {
+        pwr: PIN_23,
+        cs: PIN_25,
+        dio: PIN_24,
+        clk: PIN_29,
+        pio: PIO0,
+        dma: DMA_CH0,
+    }
+    USBResources {
+        usb: USB,
+    }
+}
 
 #[cfg(feature = "rp2350")]
 const DESCRIPTION: embassy_rp::binary_info::EntryAddr = embassy_rp::binary_info::rp_program_description!(
@@ -67,18 +89,14 @@ pub static PICOTOOL_ENTRIES: [embassy_rp::binary_info::EntryAddr; 4] = [
 bind_interrupts!(pub struct Irqs {
     PIO0_IRQ_0 => PioInterruptHandler<PIO0>;
     USBCTRL_IRQ => USBInterruptHandler<USB>;
+    UART0_IRQ => BufferedInterruptHandler<UART0>;
 });
 
-// Creating this as a task to keep it independent and isolated
-// from failures in the main loop.
-#[embassy_executor::task]
-async fn cyw43_task(
-    runner: cyw43::Runner<
-        'static,
-        cyw43::SpiBus<Output<'static>, PioSpi<'static, PIO0, 0, DMA_CH0>>,
-    >,
-) -> ! {
-    runner.run().tracked(Wifi).await
+#[tracked_task(GPS)]
+pub async fn gps_task(r: GpsResources, irqs: Irqs) -> ! {
+    // We pass the individual fields from our resource struct
+    // into the actual driver logic.
+    gps::GPS::run(r.uart, r.tx, r.rx, irqs).await
 }
 
 // Background Logger Task
@@ -92,72 +110,34 @@ async fn cyw43_task(
 // let mut ticker = Ticker::every(Duration::from_secs(1));
 
 #[tracked_task(Main)]
+#[embassy_executor::task]
 async fn run_low(spawner: Spawner, p: embassy_rp::Peripherals) {
     spawner.spawn(unwrap!(stats_task(TASK_NAMES, Stats)));
 
-    // CYW43 Wifi Chip Setup
-    let fw = aligned_bytes!("../../firmware/cyw43-firmware/43439A0.bin");
-    let clm = aligned_bytes!("../../firmware/cyw43-firmware/43439A0_clm.bin");
-    let nvram = aligned_bytes!("../../firmware/cyw43-firmware/nvram_rp2040.bin");
+    let r = AssignedResources::take(p);
 
-    assign_resources!(p => {
-        WIFI_PWR: PIN_23,
-        WIFI_CS: PIN_25,
-        WIFI_DIO: PIN_24,
-        WIFI_CLK: PIN_29,
-        PIO_CH0: PIO0,
-        DMA_CH0: DMA_CH0,
-        USB_BUS: USB,
-    });
+    let (mut control, device) = wifi::init_and_spawn(spawner, r.WifiResources, Irqs).await;
 
-    let pwr = Output::new(WIFI_PWR, Level::Low);
-    let cs = Output::new(WIFI_CS, Level::High);
-    let mut pio = Pio::new(PIO_CH0, Irqs);
-    let spi = PioSpi::new(
-        &mut pio.common,
-        pio.sm0,
-        RM2_CLOCK_DIVIDER,
-        pio.irq0,
-        cs,
-        WIFI_DIO,
-        WIFI_CLK,
-        DMA_CH0,
-    );
+    let (mut class, usb_runner) = usb::setup_usb(r.USBResources.usb);
 
-    static STATE: StaticCell<cyw43::State> = StaticCell::new();
+    let gps_runner = gps_task(r.GpsResources, Irqs);
 
-    let state = STATE.init(cyw43::State::new());
-    let (_net_device, mut control, runner) = cyw43::new(state, pwr, spi, fw, nvram).await;
+    spawner.spawn(unwrap!(blinky(control)));
 
-    spawner.spawn(unwrap!(cyw43_task(runner)));
-    control.init(clm).await;
-    control
-        .set_power_management(cyw43::PowerManagementMode::PowerSave)
-        .await;
-
-    let (mut class, usb_runner) = usb::setup_usb(USB_BUS);
-
-    join(
-        core0_loop(control),
-        join(usb_runner, core0_repl(&mut class)),
-    )
-    .tracked(Usb)
-    .await;
+    join(usb_runner, core0_repl(&mut class)).tracked(Usb).await;
 }
 
-async fn core0_loop<'a>(mut control: Control<'a>) -> ! {
-    async move {
-        let short_delay = Duration::from_millis(100);
-        let long_delay = Duration::from_millis(900);
-        loop {
-            control.gpio_set(0, true).await;
-            Timer::after(short_delay).await;
-            control.gpio_set(0, false).await;
-            Timer::after(long_delay).await;
-        }
+#[tracked_task(Blinky)]
+#[embassy_executor::task]
+async fn blinky(mut control: Control<'static>) -> ! {
+    let short_delay = Duration::from_millis(100);
+    let long_delay = Duration::from_millis(900);
+    loop {
+        control.gpio_set(0, true).await;
+        Timer::after(short_delay).await;
+        control.gpio_set(0, false).await;
+        Timer::after(long_delay).await;
     }
-    .tracked(Blinky)
-    .await
 }
 
 async fn core0_repl<'d, T: Instance + 'd>(serial: &mut CdcAcmClass<'d, Driver<'d, T>>) -> ! {

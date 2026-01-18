@@ -9,43 +9,31 @@
 /// ```
 #[macro_export]
 macro_rules! assign_resources {
-    ($p:expr => { $($name:ident: $field:ident),* $(,)? }) => {
-        // Compile-time duplicate detection
-        const _: () = {
-            let fields = [$(stringify!($field)),*];
-            let mut i = 0;
-            while i < fields.len() {
-                let mut j = i + 1;
-                while j < fields.len() {
-                    // Compare strings byte by byte at compile time.
-                    // This ensures no two names are mapped to the same hardware peripheral field.
-                    let a = fields[i].as_bytes();
-                    let b = fields[j].as_bytes();
-                    if a.len() == b.len() {
-                        let mut k = 0;
-                        let mut match_found = true;
-                        while k < a.len() {
-                            if a[k] != b[k] {
-                                match_found = false;
-                                break;
-                            }
-                            k += 1;
-                        }
-                        if match_found {
-                            panic!("Resource conflict detected in assign_resources!");
-                        }
-                    }
-                    j += 1;
-                }
-                i += 1;
-            }
-        };
-
-        // Generate the bindings: let Name = Peripherals.Field;
+    ($( $group_name:ident { $($name:ident: $field:ident),* $(,)? } )*) => {
+        // 1. Structs now store Peri handles directly
         $(
-            #[allow(non_snake_case)]
-            let $name = $p.$field;
+            pub struct $group_name {
+                $( pub $name: embassy_rp::Peri<'static, embassy_rp::peripherals::$field>, )*
+            }
         )*
+
+        pub struct AssignedResources {
+            $( pub $group_name: $group_name, )*
+        }
+
+        impl AssignedResources {
+            pub fn take(p: embassy_rp::Peripherals) -> Self {
+                Self {
+                    $(
+                        $group_name: $group_name {
+                            // We use .into() here ONCE inside the macro
+                            // so it isn't needed in the main code.
+                            $( $name: p.$field.into(), )*
+                        },
+                    )*
+                }
+            }
+        }
     };
 }
 // A set of macros to handle logging for both defmt and log.
