@@ -123,15 +123,15 @@ pub async fn stats_task(names: &'static [&'static str], stats_id: TaskId) {
             let delta_interrupt_active = interrupt_active.wrapping_sub(last_interrupt_active);
             let delta_time = (now - last_time).as_ticks() as u32;
 
-            info!("Idle: {}", delta_idle);
-            info!("Interrupt Active: {}", delta_interrupt_active);
-            info!("Time: {}", delta_time);
+            // info!("Idle: {}", delta_idle);
+            // info!("Interrupt Active: {}", delta_interrupt_active);
+            // info!("Time: {}", delta_time);
 
             // CPU Usage Calculations
-            let usage =
-                100.0 * (1.0 - ((delta_idle - delta_interrupt_active) as f32 / delta_time as f32));
+            let delta_actual_idle = delta_idle.saturating_sub(delta_interrupt_active);
+            let usage = 100.0 * (1.0 - (delta_actual_idle as f32 / delta_time as f32));
             let interrupt_usage = 100.0 * (delta_interrupt_active as f32 / delta_time as f32);
-            let thread_usage = 100.0 * ((delta_time - delta_idle) as f32 / delta_time as f32);
+            let thread_usage = 100.0 * (delta_time.saturating_sub(delta_idle) as f32 / delta_time as f32);
 
             // Polls Calculations
             let thread_polls = instrumented_executor::POLL_COUNT.swap(0, Ordering::Relaxed);
