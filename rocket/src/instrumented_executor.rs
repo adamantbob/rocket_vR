@@ -198,13 +198,13 @@ impl InstrumentedInterruptExecutor {
     /// Get the spawner for this executor.
     ///
     /// Returns a SendSpawner that can be used to spawn tasks on this executor.
-    pub fn spawner(&'static self) -> embassy_executor::SendSpawner {
-        if !critical_section::with(|cs| self.started.borrow(cs).get()) {
-            panic!("InterruptExecutor::spawner() called on uninitialized executor.");
-        }
-        let executor = unsafe { (&*self.executor.get()).assume_init_ref() };
-        executor.spawner().make_send()
-    }
+    // pub fn spawner(&'static self) -> embassy_executor::SendSpawner {
+    //     if !critical_section::with(|cs| self.started.borrow(cs).get()) {
+    //         panic!("InterruptExecutor::spawner() called on uninitialized executor.");
+    //     }
+    //     let executor = unsafe { (&*self.executor.get()).assume_init_ref() };
+    //     executor.spawner().make_send()
+    // }
 
     /// Interrupt handler callback.
     ///

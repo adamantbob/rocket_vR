@@ -17,6 +17,7 @@ macro_rules! assign_resources {
             }
         )*
 
+        #[allow(non_snake_case)]
         pub struct AssignedResources {
             $( pub $group_name: $group_name, )*
         }

@@ -13,15 +13,12 @@ compile_error!("Mismatched target for RP2040! Please use 'cargo run-pico'");
 compile_error!("Mismatched target for RP2350! Please use 'cargo run-pico2'");
 
 use cortex_m_rt::entry;
-use cyw43::Control;
 use defmt::unwrap;
 use embassy_executor::Spawner;
 use embassy_futures::join::join;
 use embassy_rp::interrupt::{InterruptExt, Priority};
-use embassy_rp::peripherals::{DMA_CH0, PIO0, UART0, USB};
-use embassy_rp::pio::InterruptHandler as PioInterruptHandler;
-use embassy_rp::uart::BufferedInterruptHandler;
-use embassy_rp::usb::{Driver, Instance, InterruptHandler as USBInterruptHandler};
+use embassy_rp::peripherals::{PIO0, UART0, USB};
+use embassy_rp::usb::{Driver, Instance};
 use embassy_rp::{bind_interrupts, interrupt};
 use embassy_time::{Duration, Instant, TICK_HZ, Timer};
 use embassy_usb::class::cdc_acm::CdcAcmClass;
@@ -38,17 +35,20 @@ mod macros;
 mod usb;
 mod utilization;
 mod wifi;
+mod channels;
 
 use crate::utilization::{TrackedExt, stats_task};
-use crate::wifi::WifiRunner;
+use crate::wifi::LedState;
 
-define_utilization_tasks!(Stats, Wifi, Usb, Blinky, Repl, RunMed, Main, GPS);
+define_utilization_tasks!(Stats, Wifi, Blinky, Repl, StateMachine, InitLowPrioTasks, GPS);
 
 assign_resources! {
-    GpsResources {
+    GPSResources {
         uart: UART0,
         tx: PIN_12,
         rx: PIN_13,
+        dma_tx: DMA_CH1,
+        dma_rx: DMA_CH2,
     }
     WifiResources {
         pwr: PIN_23,
@@ -87,55 +87,28 @@ pub static PICOTOOL_ENTRIES: [embassy_rp::binary_info::EntryAddr; 4] = [
 
 // Bind Interrupts to their appropriate interrupt handler
 bind_interrupts!(pub struct Irqs {
-    PIO0_IRQ_0 => PioInterruptHandler<PIO0>;
-    USBCTRL_IRQ => USBInterruptHandler<USB>;
-    UART0_IRQ => BufferedInterruptHandler<UART0>;
+    PIO0_IRQ_0 => embassy_rp::pio::InterruptHandler<PIO0>;
+    USBCTRL_IRQ => embassy_rp::usb::InterruptHandler<USB>;
+    UART0_IRQ => embassy_rp::uart::BufferedInterruptHandler<UART0>;
 });
 
 #[tracked_task(GPS)]
-pub async fn gps_task(r: GpsResources, irqs: Irqs) -> ! {
+#[embassy_executor::task]
+pub async fn gps_task(r: GPSResources, irqs: Irqs) -> ! {
     // We pass the individual fields from our resource struct
     // into the actual driver logic.
-    gps::GPS::run(r.uart, r.tx, r.rx, irqs).await
-}
-
-// Background Logger Task
-// #[embassy_executor::task]
-// async fn logger_task(driver: Driver<'static, USB>) {
-//     embassy_usb_logger::run!(1024, log::LevelFilter::Info, driver);
-// }
-
-// useful Stuff
-// adc example: ticker - execute every x time. Use this for main logging loop
-// let mut ticker = Ticker::every(Duration::from_secs(1));
-
-#[tracked_task(Main)]
-#[embassy_executor::task]
-async fn run_low(spawner: Spawner, p: embassy_rp::Peripherals) {
-    spawner.spawn(unwrap!(stats_task(TASK_NAMES, Stats)));
-
-    let r = AssignedResources::take(p);
-
-    let (mut control, device) = wifi::init_and_spawn(spawner, r.WifiResources, Irqs).await;
-
-    let (mut class, usb_runner) = usb::setup_usb(r.USBResources.usb);
-
-    let gps_runner = gps_task(r.GpsResources, Irqs);
-
-    spawner.spawn(unwrap!(blinky(control)));
-
-    join(usb_runner, core0_repl(&mut class)).tracked(Usb).await;
+    gps::GPSManager::init(r, irqs).await
 }
 
 #[tracked_task(Blinky)]
 #[embassy_executor::task]
-async fn blinky(mut control: Control<'static>) -> ! {
+async fn blinky() -> ! {
     let short_delay = Duration::from_millis(100);
     let long_delay = Duration::from_millis(900);
     loop {
-        control.gpio_set(0, true).await;
+        LedState::On.send().await;
         Timer::after(short_delay).await;
-        control.gpio_set(0, false).await;
+        LedState::Off.send().await;
         Timer::after(long_delay).await;
     }
 }
@@ -199,27 +172,49 @@ async fn run_repl<'d, T: Instance + 'd>(
     }
 }
 
-// Test task for the pre-emption test
-// This is somewhat bad form to block for a long time in an interrupt.
+// State Machine Task. 
+// This task is designed to run at a higher priority and preempt other tasks
+// to ensure deadlines are met.
+#[tracked_task(StateMachine)]
 #[embassy_executor::task]
-async fn run_med() {
-    async move {
-        loop {
-            let start = Instant::now();
-            // info!("    [med] Starting long computation");
+async fn state_machine() {
+    loop {
+        let start = Instant::now();
 
-            // Spin-wait to simulate a long CPU computation
-            // embassy_time::block_for(embassy_time::Duration::from_millis(50)); // ~1 second
+        embassy_time::block_for(embassy_time::Duration::from_millis(50)); // ~50ms
 
-            let end = Instant::now();
-            let ms = end.duration_since(start).as_ticks() * 1000 / TICK_HZ;
-            // info!("    [med] done in {} ms", ms);
+        let end = Instant::now();
+        let ms = end.duration_since(start).as_ticks() * 1000 / TICK_HZ;
 
-            Timer::after(Duration::from_millis(900)).await;
-        }
+        Timer::after(Duration::from_millis(900)).await;
     }
-    .tracked(RunMed)
-    .await
+}
+
+/* Init Tasks */
+// These tasks are designed to start up, spawn all the tasks then return.
+// This allows for a clean separation of concerns and makes it easier to reason about the code.
+
+/// Spawns all low priority tasks.
+/// Start each init and move on as we wait for init. 
+/// Critical tasks have their own state and will report their status via the 
+/// global task status channel.
+#[tracked_task(InitLowPrioTasks)]
+#[embassy_executor::task]
+async fn init_low_prio_tasks(spawner: Spawner, p: embassy_rp::Peripherals) {
+    spawner.spawn(unwrap!(stats_task(TASK_NAMES, Stats)));
+
+    let r = AssignedResources::take(p);
+
+    spawner.spawn(unwrap!(wifi::wifi_task(r.WifiResources, Irqs)));
+
+    let (mut class, usb_runner) = usb::setup_usb(r.USBResources.usb);
+
+    let gps_runner = gps_task(r.GPSResources, Irqs);
+
+    spawner.spawn(unwrap!(blinky()));
+    spawner.spawn(unwrap!(gps_runner));
+
+    join(usb_runner, core0_repl(&mut class)).await;
 }
 
 static EXECUTOR_HIGH: InstrumentedInterruptExecutor = InstrumentedInterruptExecutor::new();
@@ -236,10 +231,10 @@ fn main() -> ! {
     // High-priority executor: SWI_IRQ_1, priority level 2
     interrupt::SWI_IRQ_1.set_priority(Priority::P2);
     let spawner = EXECUTOR_HIGH.start(interrupt::SWI_IRQ_1);
-    spawner.spawn(unwrap!(run_med()));
+    spawner.spawn(unwrap!(state_machine()));
 
     let executor = EXECUTOR_LOW.init(InstrumentedExecutor::new());
     executor.run(|spawner| {
-        spawner.spawn(unwrap!(run_low(spawner, p)));
+        spawner.spawn(unwrap!(init_low_prio_tasks(spawner, p)));
     });
 }
