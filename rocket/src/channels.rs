@@ -1,4 +1,4 @@
-use embassy_sync::blocking_mutex::raw::ThreadModeRawMutex;
+use embassy_sync::blocking_mutex::raw::CriticalSectionRawMutex;
 use embassy_sync::channel::Channel;
 
 /// Module to contain all global asynchronous channels.
@@ -8,8 +8,5 @@ use embassy_sync::channel::Channel;
 use crate::wifi::LedState;
 /// Global asynchronous channel for passing LED commands to the wifi_task.
 /// Capacity is 2 messages to prevent blocking callers during heavy SPI activity.
-pub static LED_CHANNEL: Channel<ThreadModeRawMutex, LedState, 2> = Channel::new();
+pub static LED_CHANNEL: Channel<CriticalSectionRawMutex, LedState, 2> = Channel::new();
 
-// GPS Channels
-// Channel for passing data from the GPS task to the state machine.
-// pub static GPS_DATA_CHANNEL: Channel<ThreadModeRawMutex, GpsState, 1> = Channel::new();

@@ -1,0 +1,184 @@
+use crate::{info, error, StateMachine};
+use crate::datacells::{GPS_DATA, GpsData, PersistentData, FlightState};
+use proc_macros::tracked_task;
+use embassy_time::{Instant, Timer, Duration, Ticker};
+use core::cell::Cell;
+use heapless::Vec;
+
+// State Machine Task. 
+// This task is designed to run at a higher priority and preempt other tasks
+// to ensure deadlines are met.
+#[tracked_task(StateMachine)]
+#[embassy_executor::task]
+pub async fn state_machine_task() {
+    let mut sm = RocketStateMachine::new();
+    // Create a ticker set to 100Hz (10ms period)
+    let mut ticker = Ticker::every(Duration::from_hz(100));
+    // We track the expected time of the NEXT tick
+    let mut next_expected_tick = Instant::now() + Duration::from_hz(100);
+    // Keep track of the last seen GPS time
+    let mut last_seen_gps_time = 0u32;
+
+    // --- ATTEMPT RECOVERY ---
+    // This is here if the code crashes a trips the watchdog mid-flight.
+    // It will resume the flight from where it left off.
+    if let Some(recovered) = crate::datacells::try_recover_flight_data() {
+        sm.ground_level_mm = Some(recovered.ground_level);
+        sm.state = recovered.state;
+        info!("Warm start! Resumed at state: {:?}", sm.state);
+    } else {
+        // --- EXPLICIT CALIBRATION SCOPE ---
+        // Here the calibration runs in a dedicated scope
+        // to ensure the memory scope is as small as possible.
+        {
+            let mut calibration_buffer: Vec<i32, 10> = Vec::new();
+            info!("GPS Warm-up: Waiting for 10 unique samples...");
+
+            while !calibration_buffer.is_full() {
+                let gps = GPS_DATA.lock(|cell: &Cell<GpsData>| cell.get());
+                
+                if gps.fix_valid && gps.utc_time_secs != last_seen_gps_time {
+                    let _ = calibration_buffer.push(gps.altitude_mm);
+                    last_seen_gps_time = gps.utc_time_secs;
+                    info!("Calibrating... {}/10", calibration_buffer.len());
+                }
+                // We still yield to the executor so other tasks (like GPS) can run
+                Timer::after_millis(50).await; 
+            }
+
+            let sum: i32 = calibration_buffer.iter().sum();
+            sm.ground_level_mm = Some(sum / 10);
+
+            sm.state = FlightState::GroundIdle; 
+            info!("Calibration complete. Transitioned to GroundIdle.");
+        } 
+        // After calibration is done, initialize the persistence
+        let initial_data = PersistentData {
+            ground_level: sm.ground_level_mm.unwrap(),
+            state: FlightState::GroundIdle,
+        };
+        crate::datacells::save_flight_data(initial_data);
+    }
+
+    
+
+    // --- MAIN FLIGHT LOOP ---
+    loop {
+        // 1. Record when we actually started this loop
+        let start_time = Instant::now();
+
+        // 2. Perform the logic
+        let gps = crate::datacells::GPS_DATA.lock(|cell: &Cell<GpsData>| cell.get());
+        sm.update(gps);
+        // In your loop, update this every time the state changes:
+        
+        let initial_data = PersistentData {
+            ground_level: sm.ground_level_mm.unwrap(),
+            state: sm.state,
+        };
+        crate::datacells::save_flight_data(initial_data);
+
+        // 3. Wait for the ticker
+        ticker.next().await;
+
+        // 4. CRITICAL CHECK: Did we finish too late?
+        // If the current time is significantly past when we wanted to wake up,
+        // it means sm.update() or an interrupt took too long.
+        let now = Instant::now();
+        if now > next_expected_tick + Duration::from_micros(500) { // 0.5ms grace period
+            let lateness = now - next_expected_tick;
+            error!("LOOP OVERRUN: State machine is late by {}us!", lateness.as_micros());
+            // You could set a flag here to be sent over telemetry
+        }
+
+        // Advance our internal clock for the next check
+        next_expected_tick += Duration::from_hz(100);
+    }
+}
+
+const MIN_FLIGHT_ALTITUDE_MM: i32 = 50_000; // 50 Meters
+const LAUNCH_VELOCITY_THRESHOLD_MMS: i32 = 15_000; // 15 m/s
+
+pub struct RocketStateMachine {
+    pub state: FlightState,
+    pub last_altitude_mm: i32,
+    pub max_altitude_mm: i32,
+    pub apogee_detect_count: u8,
+    pub safety_armed: bool, // The "Safety Lock"
+    /// Ground level altitude captured before launch. 
+    /// None = Not yet determined.
+    pub ground_level_mm: Option<i32>,
+}
+
+impl RocketStateMachine {
+    pub const fn new() -> Self {
+        Self {
+            state: FlightState::Initializing,
+            last_altitude_mm: 0,
+            max_altitude_mm: 0,
+            apogee_detect_count: 0,
+            safety_armed: false,
+            ground_level_mm: None,
+        }
+    }
+
+    pub fn update(&mut self, gps: GpsData) {
+        // Track the highest point reached regardless of state
+        if gps.altitude_mm > self.max_altitude_mm {
+            self.max_altitude_mm = gps.altitude_mm;
+        }
+
+        // Arm the safety if we are high enough and moving
+        if !self.safety_armed && gps.altitude_mm > MIN_FLIGHT_ALTITUDE_MM {
+            self.safety_armed = true;
+            // info!("Safety Disengaged: Recovery systems ARMED");
+        }
+
+        match self.state {
+            FlightState::Initializing => {
+                // We should never be here. The Initialization phase is handled entirely
+                // in the task in order to keep the memory scope as small as possible.
+                unreachable!();
+            }
+            FlightState::GroundIdle => {
+                if gps.fix_valid && gps.speed_mm_per_sec > LAUNCH_VELOCITY_THRESHOLD_MMS {
+                    self.state = FlightState::PoweredFlight;
+                }
+                if gps.fix_valid && self.ground_level_mm.is_none() {
+                    self.ground_level_mm = Some(gps.altitude_mm);
+                }
+
+                // Then check safety against ground:
+                if gps.altitude_mm > (self.ground_level_mm.unwrap() + MIN_FLIGHT_ALTITUDE_MM) {
+                    self.safety_armed = true;
+                }
+            }
+            FlightState::PoweredFlight => {
+                // Transition to coasting when we stop accelerating
+                if gps.speed_mm_per_sec < (self.last_altitude_mm) { // Simplified
+                    self.state = FlightState::Coasting;
+                }
+            }
+            FlightState::Coasting => {
+                // Only allow Apogee detection if we are above the safety floor
+                if self.safety_armed {
+                    if gps.altitude_mm < self.max_altitude_mm - 2000 { // 2m drop
+                        self.apogee_detect_count += 1;
+                        if self.apogee_detect_count > 5 {
+                            self.state = FlightState::ApogeeReached;
+                        }
+                    } else {
+                        self.apogee_detect_count = 0;
+                    }
+                }
+            }
+            FlightState::ApogeeReached => {
+                // LOGIC: Fire Pyro Ejection Charge Here
+                self.state = FlightState::Descent;
+            }
+            // ... rest of states ...
+            _ => {}
+        }
+        self.last_altitude_mm = gps.altitude_mm;
+    }
+}

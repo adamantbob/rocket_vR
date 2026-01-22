@@ -36,6 +36,8 @@ mod usb;
 mod utilization;
 mod wifi;
 mod channels;
+mod datacells;
+mod state_machine;
 
 use crate::utilization::{TrackedExt, stats_task};
 use crate::wifi::LedState;
@@ -92,13 +94,6 @@ bind_interrupts!(pub struct Irqs {
     UART0_IRQ => embassy_rp::uart::BufferedInterruptHandler<UART0>;
 });
 
-#[tracked_task(GPS)]
-#[embassy_executor::task]
-pub async fn gps_task(r: GPSResources, irqs: Irqs) -> ! {
-    // We pass the individual fields from our resource struct
-    // into the actual driver logic.
-    gps::GPSManager::init(r, irqs).await
-}
 
 #[tracked_task(Blinky)]
 #[embassy_executor::task]
@@ -172,24 +167,6 @@ async fn run_repl<'d, T: Instance + 'd>(
     }
 }
 
-// State Machine Task. 
-// This task is designed to run at a higher priority and preempt other tasks
-// to ensure deadlines are met.
-#[tracked_task(StateMachine)]
-#[embassy_executor::task]
-async fn state_machine() {
-    loop {
-        let start = Instant::now();
-
-        embassy_time::block_for(embassy_time::Duration::from_millis(50)); // ~50ms
-
-        let end = Instant::now();
-        let ms = end.duration_since(start).as_ticks() * 1000 / TICK_HZ;
-
-        Timer::after(Duration::from_millis(900)).await;
-    }
-}
-
 /* Init Tasks */
 // These tasks are designed to start up, spawn all the tasks then return.
 // This allows for a clean separation of concerns and makes it easier to reason about the code.
@@ -209,7 +186,7 @@ async fn init_low_prio_tasks(spawner: Spawner, p: embassy_rp::Peripherals) {
 
     let (mut class, usb_runner) = usb::setup_usb(r.USBResources.usb);
 
-    let gps_runner = gps_task(r.GPSResources, Irqs);
+    let gps_runner = gps::gps_task(r.GPSResources, Irqs);
 
     spawner.spawn(unwrap!(blinky()));
     spawner.spawn(unwrap!(gps_runner));
@@ -231,7 +208,7 @@ fn main() -> ! {
     // High-priority executor: SWI_IRQ_1, priority level 2
     interrupt::SWI_IRQ_1.set_priority(Priority::P2);
     let spawner = EXECUTOR_HIGH.start(interrupt::SWI_IRQ_1);
-    spawner.spawn(unwrap!(state_machine()));
+    spawner.spawn(unwrap!(state_machine::state_machine_task()));
 
     let executor = EXECUTOR_LOW.init(InstrumentedExecutor::new());
     executor.run(|spawner| {

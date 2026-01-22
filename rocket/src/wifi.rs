@@ -1,8 +1,6 @@
 use crate::{Irqs, WifiResources, info};
 use cyw43::aligned_bytes;
 use cyw43_pio::{PioSpi, RM2_CLOCK_DIVIDER};
-use embassy_sync::blocking_mutex::raw::ThreadModeRawMutex;
-use embassy_sync::channel::Channel;
 use embassy_rp::gpio::{Level, Output};
 use embassy_rp::pio::Pio;
 use embassy_futures::join::join;
@@ -86,7 +84,7 @@ pub async fn wifi_task(
 
     // --- 3. Concurrent Logic Definition ---
 
-    /// This sub-future handles logic that requires the CYW43 runner to be active.
+    // This sub-future handles logic that requires the CYW43 runner to be active.
     let signal_receiver = async {
         // Initialization commands (CLM loading) require the runner to be polling 
         // the SPI bus, so they must be performed within the joined future.

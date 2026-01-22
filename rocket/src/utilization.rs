@@ -1,4 +1,7 @@
-use crate::{info, warn};
+#[cfg(feature = "verbose-utilization")]
+use crate::info;
+#[cfg(not(feature = "verbose-utilization"))]
+use crate::warn;
 use core::future::Future;
 use core::pin::Pin;
 use core::task::{Context, Poll};
