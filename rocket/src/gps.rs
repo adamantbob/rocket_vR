@@ -1,6 +1,6 @@
 use crate::datacells::{POSITION_DATA, PositionData};
 use crate::{GPS, GPSResources, Irqs, info};
-use embassy_rp::uart::{BufferedUart, BufferedUartRx, Config, Instance};
+use embassy_rp::uart::{BufferedUart, Config};
 use embassy_time::{Instant, Timer};
 use embedded_io_async::{Read, Write};
 use heapless::Vec;

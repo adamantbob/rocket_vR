@@ -17,10 +17,10 @@ use defmt::unwrap;
 use embassy_executor::Spawner;
 use embassy_futures::join::join;
 use embassy_rp::interrupt::{InterruptExt, Priority};
-use embassy_rp::peripherals::{PIO0, UART0, USB};
+use embassy_rp::peripherals::{I2C0, PIO0, UART0, USB};
 use embassy_rp::usb::{Driver, Instance};
 use embassy_rp::{bind_interrupts, interrupt};
-use embassy_time::{Duration, Instant, TICK_HZ, Timer};
+use embassy_time::{Duration, Timer};
 use embassy_usb::class::cdc_acm::CdcAcmClass;
 use heapless::Vec;
 use proc_macros::tracked_task;
@@ -30,19 +30,29 @@ use {defmt_rtt as _, panic_probe as _};
 mod instrumented_executor;
 use instrumented_executor::{InstrumentedExecutor, InstrumentedInterruptExecutor};
 
+mod channels;
+mod datacells;
 mod gps;
+mod imu;
 mod macros;
+mod state_machine;
 mod usb;
 mod utilization;
 mod wifi;
-mod channels;
-mod datacells;
-mod state_machine;
 
 use crate::utilization::{TrackedExt, stats_task};
 use crate::wifi::LedState;
 
-define_utilization_tasks!(Stats, Wifi, Blinky, Repl, StateMachine, InitLowPrioTasks, GPS);
+define_utilization_tasks!(
+    Stats,
+    Wifi,
+    Blinky,
+    Repl,
+    StateMachine,
+    InitLowPrioTasks,
+    GPS,
+    IMU
+);
 
 assign_resources! {
     GPSResources {
@@ -62,6 +72,11 @@ assign_resources! {
     }
     USBResources {
         usb: USB,
+    }
+    IMUResources {
+        i2c: I2C0,
+        scl: PIN_9,
+        sda: PIN_8,
     }
 }
 
@@ -92,8 +107,8 @@ bind_interrupts!(pub struct Irqs {
     PIO0_IRQ_0 => embassy_rp::pio::InterruptHandler<PIO0>;
     USBCTRL_IRQ => embassy_rp::usb::InterruptHandler<USB>;
     UART0_IRQ => embassy_rp::uart::BufferedInterruptHandler<UART0>;
+    I2C0_IRQ => embassy_rp::i2c::InterruptHandler<I2C0>;
 });
-
 
 #[tracked_task(Blinky)]
 #[embassy_executor::task]
@@ -172,8 +187,8 @@ async fn run_repl<'d, T: Instance + 'd>(
 // This allows for a clean separation of concerns and makes it easier to reason about the code.
 
 /// Spawns all low priority tasks.
-/// Start each init and move on as we wait for init. 
-/// Critical tasks have their own state and will report their status via the 
+/// Start each init and move on as we wait for init.
+/// Critical tasks have their own state and will report their status via the
 /// global task status channel.
 #[tracked_task(InitLowPrioTasks)]
 #[embassy_executor::task]
@@ -190,6 +205,7 @@ async fn init_low_prio_tasks(spawner: Spawner, p: embassy_rp::Peripherals) {
 
     spawner.spawn(unwrap!(blinky()));
     spawner.spawn(unwrap!(gps_runner));
+    spawner.spawn(unwrap!(imu::imu_task(r.IMUResources, Irqs)));
 
     join(usb_runner, core0_repl(&mut class)).await;
 }
