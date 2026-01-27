@@ -1,12 +1,19 @@
-use crate::datacells::{POSITION_DATA, PositionData};
+use crate::datacells::DataCell;
+use crate::state_machine::SENSOR_DATA;
 use crate::{GPS, GPSResources, Irqs, info};
 use embassy_rp::uart::{BufferedUart, Config};
+use embassy_sync::blocking_mutex::Mutex;
+use embassy_sync::blocking_mutex::raw::CriticalSectionRawMutex;
 use embassy_time::{Instant, Timer};
 use embedded_io_async::{Read, Write};
 use heapless::Vec;
 use proc_macros::tracked_task;
 use static_cell::StaticCell;
 use {defmt_rtt as _, panic_probe as _};
+
+pub mod types;
+
+use crate::gps::types::*;
 
 #[tracked_task(GPS)]
 #[embassy_executor::task]
@@ -37,7 +44,7 @@ impl GPSManager {
         Self::upgrade_link(&mut uart).await;
 
         let (_tx, mut rx) = uart.split();
-        let mut current_pos = PositionData::new();
+        let mut current_pos = GPSData::new();
         let mut filter = VerticalKalman::new(0.0);
         let mut filter_init = false;
         let mut last_packet = Instant::now();
@@ -75,7 +82,7 @@ impl GPSManager {
                         }
 
                         // Share data
-                        POSITION_DATA.lock(|cell| cell.set(current_pos));
+                        SENSOR_DATA.gps.update(current_pos);
 
                         pos = 0;
                     }
@@ -98,7 +105,7 @@ impl GPSManager {
             .await;
     }
 
-    fn process_line(line: &[u8], position_data: &mut PositionData) {
+    fn process_line(line: &[u8], gps_data: &mut GPSData) {
         if !Self::validate_checksum(line) {
             return;
         }
@@ -115,7 +122,7 @@ impl GPSManager {
         match fields[0] {
             "$GPGGA" => {
                 // Field 1: UTC Time (HHMMSS.SS)
-                position_data.utc_time_secs = fields[1]
+                gps_data.utc_time_secs = fields[1]
                     .split('.')
                     .next()
                     .unwrap_or("0")
@@ -123,33 +130,33 @@ impl GPSManager {
                     .unwrap_or(0);
 
                 // Field 6: Quality
-                position_data.fix_valid = fields[6] != "0";
+                gps_data.fix_valid = fields[6] != "0";
 
                 // Field 7: Satellites
-                position_data.satellites = fields[7].parse::<u8>().unwrap_or(0);
+                gps_data.satellites = fields[7].parse::<u8>().unwrap_or(0);
 
                 // Field 8: HDOP/PDOP (GPS units vary, but usually this is horizontal/positional dilution)
                 // Parse "1.2" into 12
-                position_data.pdop_x10 = Self::parse_to_fixed_x10(fields[8]);
+                gps_data.pdop_x10 = Self::parse_to_fixed_x10(fields[8]);
 
                 // Field 9: Altitude
-                position_data.raw_alt_mm = Self::parse_to_mm(fields[9]);
+                gps_data.raw_alt_mm = Self::parse_to_mm(fields[9]);
 
-                if position_data.fix_valid {
-                    position_data.lat_microdegrees = Self::parse_degrees_int(fields[2], fields[3]);
-                    position_data.lon_microdegrees = Self::parse_degrees_int(fields[4], fields[5]);
+                if gps_data.fix_valid {
+                    gps_data.lat_microdegrees = Self::parse_degrees_int(fields[2], fields[3]);
+                    gps_data.lon_microdegrees = Self::parse_degrees_int(fields[4], fields[5]);
                 }
             }
             "$GPRMC" => {
                 // RMC also has time at Field 1
-                position_data.utc_time_secs = fields[1]
+                gps_data.utc_time_secs = fields[1]
                     .split('.')
                     .next()
                     .unwrap_or("0")
                     .parse::<u32>()
                     .unwrap_or(0);
-                position_data.fix_valid = fields[2] == "A";
-                position_data.speed_mm_per_sec = Self::parse_speed_to_mms(fields[7]);
+                gps_data.fix_valid = fields[2] == "A";
+                gps_data.speed_mm_per_sec = Self::parse_speed_to_mms(fields[7]);
             }
             _ => {}
         }

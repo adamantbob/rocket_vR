@@ -1,10 +1,10 @@
 // src/imu/adxl375.rs
+use crate::imu::types::SensorError;
 use crate::info;
 use embassy_embedded_hal::shared_bus::asynch::i2c::I2cDevice;
 use embassy_rp::i2c::{Async, I2c as RpI2c};
 use embassy_rp::peripherals::I2C0;
 use embassy_sync::blocking_mutex::raw::NoopRawMutex;
-use embassy_sync::mutex::Mutex;
 
 use embedded_hal_async::i2c::I2c as AsyncI2c;
 
@@ -21,21 +21,21 @@ impl Adxl375 {
         Self { i2c: i2c_dev }
     }
 
-    pub async fn init(&mut self) -> Result<(), &'static str> {
+    pub async fn init(&mut self) -> Result<(), SensorError> {
         // Register 0x31 (DATA_FORMAT): 0x0B = Full-Res, +/- 200g
         AsyncI2c::write(&mut self.i2c, Self::ADDR, &[0x31, 0x0B])
             .await
-            .map_err(|_| "ADXL: Failed to set Data Format")?;
+            .map_err(|_| SensorError::BusError)?;
 
         // Register 0x2C (BW_RATE): 0x0D = 800Hz ODR
         AsyncI2c::write(&mut self.i2c, Self::ADDR, &[0x2C, 0x0D])
             .await
-            .map_err(|_| "ADXL: Failed to set ODR")?;
+            .map_err(|_| SensorError::BusError)?;
 
         // Register 0x2D (POWER_CTL): 0x08 = Start measurement
         AsyncI2c::write(&mut self.i2c, Self::ADDR, &[0x2D, 0x08])
             .await
-            .map_err(|_| "ADXL: Failed to start measurement")?;
+            .map_err(|_| SensorError::BusError)?;
 
         info!("ADXL375: Initialized (200g @ 800Hz)");
         Ok(())
@@ -43,13 +43,13 @@ impl Adxl375 {
 
     /// Reads X, Y, and Z acceleration in milli-Gs (mG).
     /// Returns [x, y, z] as i32 for fixed-point stability.
-    pub async fn read(&mut self) -> Result<[i32; 3], &'static str> {
+    pub async fn read(&mut self) -> Result<[i32; 3], SensorError> {
         let mut buf = [0u8; 6];
 
         // Read 6 bytes starting from 0x32
         AsyncI2c::write_read(&mut self.i2c, Self::ADDR, &[0x32], &mut buf)
             .await
-            .map_err(|_| "ADXL: Read transaction failed")?;
+            .map_err(|_| SensorError::BusError)?;
 
         // Conversion: Raw LSBs * 49 mG/LSB
         // We cast to i32 immediately to prevent overflow during multiplication

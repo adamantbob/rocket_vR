@@ -1,9 +1,24 @@
-use crate::datacells::{FlightState, POSITION_DATA, PersistentData, PositionData};
+use crate::datacells::{DataCell, FlightState, PersistentData};
+use crate::gps::types::GPSData;
+use crate::imu::types::{IMUData, IMUHealth};
 use crate::{StateMachine, error, info};
 use core::cell::Cell;
 use embassy_time::{Duration, Instant, Ticker, Timer};
 use heapless::Vec;
 use proc_macros::tracked_task;
+
+/// The Global Blackboard
+pub struct SensorData {
+    pub gps: DataCell<GPSData>,
+    pub imu: DataCell<IMUData>,
+    pub imu_health: DataCell<IMUHealth>,
+}
+
+pub static SENSOR_DATA: SensorData = SensorData {
+    imu: DataCell::new(IMUData::new()),
+    imu_health: DataCell::new(IMUHealth::new()),
+    gps: DataCell::new(GPSData::new()),
+};
 
 // State Machine Task.
 // This task is designed to run at a higher priority and preempt other tasks
@@ -35,7 +50,7 @@ pub async fn state_machine_task() {
             info!("GPS Warm-up: Waiting for 10 unique samples...");
 
             while !calibration_buffer.is_full() {
-                let gps = POSITION_DATA.lock(|cell: &Cell<PositionData>| cell.get());
+                let gps = SENSOR_DATA.gps.read();
 
                 if gps.fix_valid && gps.utc_time_secs != last_seen_gps_time {
                     let _ = calibration_buffer.push(gps.raw_alt_mm);
@@ -66,8 +81,9 @@ pub async fn state_machine_task() {
         let start_time = Instant::now();
 
         // 2. Perform the logic
-        let gps = crate::datacells::POSITION_DATA.lock(|cell: &Cell<PositionData>| cell.get());
-        sm.update(gps);
+        let gps = SENSOR_DATA.gps.read();
+        let imu = SENSOR_DATA.imu.read();
+        sm.update(gps, imu);
         // In your loop, update this every time the state changes:
 
         let initial_data = PersistentData {
@@ -124,14 +140,14 @@ impl RocketStateMachine {
         }
     }
 
-    pub fn update(&mut self, position_data: PositionData) {
+    pub fn update(&mut self, gps_data: GPSData, _imu_data: IMUData) {
         // Track the highest point reached regardless of state
-        if position_data.raw_alt_mm > self.max_altitude_mm {
-            self.max_altitude_mm = position_data.raw_alt_mm;
+        if gps_data.raw_alt_mm > self.max_altitude_mm {
+            self.max_altitude_mm = gps_data.raw_alt_mm;
         }
 
         // Arm the safety if we are high enough and moving
-        if !self.safety_armed && position_data.raw_alt_mm > MIN_FLIGHT_ALTITUDE_MM {
+        if !self.safety_armed && gps_data.raw_alt_mm > MIN_FLIGHT_ALTITUDE_MM {
             self.safety_armed = true;
             // info!("Safety Disengaged: Recovery systems ARMED");
         }
@@ -143,25 +159,21 @@ impl RocketStateMachine {
                 unreachable!();
             }
             FlightState::GroundIdle => {
-                if position_data.fix_valid
-                    && position_data.speed_mm_per_sec > LAUNCH_VELOCITY_THRESHOLD_MMS
-                {
+                if gps_data.fix_valid && gps_data.speed_mm_per_sec > LAUNCH_VELOCITY_THRESHOLD_MMS {
                     self.state = FlightState::PoweredFlight;
                 }
-                if position_data.fix_valid && self.ground_level_mm.is_none() {
-                    self.ground_level_mm = Some(position_data.raw_alt_mm);
+                if gps_data.fix_valid && self.ground_level_mm.is_none() {
+                    self.ground_level_mm = Some(gps_data.raw_alt_mm);
                 }
 
                 // Then check safety against ground:
-                if position_data.raw_alt_mm
-                    > (self.ground_level_mm.unwrap() + MIN_FLIGHT_ALTITUDE_MM)
-                {
+                if gps_data.raw_alt_mm > (self.ground_level_mm.unwrap() + MIN_FLIGHT_ALTITUDE_MM) {
                     self.safety_armed = true;
                 }
             }
             FlightState::PoweredFlight => {
                 // Transition to coasting when we stop accelerating
-                if position_data.speed_mm_per_sec < (self.last_altitude_mm) {
+                if gps_data.speed_mm_per_sec < (self.last_altitude_mm) {
                     // Simplified
                     self.state = FlightState::Coasting;
                 }
@@ -169,7 +181,7 @@ impl RocketStateMachine {
             FlightState::Coasting => {
                 // Only allow Apogee detection if we are above the safety floor
                 if self.safety_armed {
-                    if position_data.raw_alt_mm < self.max_altitude_mm - 2000 {
+                    if gps_data.raw_alt_mm < self.max_altitude_mm - 2000 {
                         // 2m drop
                         self.apogee_detect_count += 1;
                         if self.apogee_detect_count > 5 {
@@ -187,6 +199,6 @@ impl RocketStateMachine {
             // ... rest of states ...
             _ => {}
         }
-        self.last_altitude_mm = position_data.raw_alt_mm;
+        self.last_altitude_mm = gps_data.raw_alt_mm;
     }
 }

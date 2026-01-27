@@ -1,18 +1,20 @@
+use crate::state_machine::SENSOR_DATA;
 use crate::{IMU, IMUResources, Irqs, info};
 use embassy_embedded_hal::shared_bus::asynch::i2c::I2cDevice;
 use embassy_rp::gpio::{Level, Output, Pin};
 use embassy_rp::i2c::{Async, I2c};
 use embassy_sync::blocking_mutex::raw::NoopRawMutex;
 use embassy_sync::mutex::Mutex;
-use embassy_time::{Duration, Ticker, with_timeout};
+use embassy_time::{Duration, Instant, Ticker, Timer, with_timeout};
 use proc_macros::tracked_task;
 use static_cell::StaticCell;
 
-// --- Sensor Crates (You'll need these in Cargo.toml) ---
-// use lsm6dsox::{Lsm6dsox, SlaveAddress};
-// use adxl375::Adxl375;
-
-pub mod adxl375;
+// Sensors
+mod adxl375;
+mod lis3mdl;
+mod lism6dsox;
+pub mod types;
+use crate::imu::types::*;
 
 pub struct ImuManager;
 
@@ -36,31 +38,110 @@ pub async fn imu_task(r: IMUResources, irqs: Irqs) -> ! {
     let i2c_mutex_ref = I2C_BUS.init(i2c_mutex);
 
     // 3. Create individual "handles" for each sensor
-    // let lsm_dev = I2cDevice::new(i2c_mutex_ref);
+    let lsm_dev = I2cDevice::new(i2c_mutex_ref);
+    let mut lsm = lism6dsox::Lsm6dsox::new(lsm_dev);
     let adxl_dev = I2cDevice::new(i2c_mutex_ref);
     let mut adxl = adxl375::Adxl375::new(adxl_dev);
-    // let mag_dev = I2cDevice::new(i2c_mutex_ref);
+    let mag_dev = I2cDevice::new(i2c_mutex_ref);
+    let mut mag = lis3mdl::Lis3mdl::new(mag_dev);
 
     // 4. Initialize Sensor Drivers
     if let Err(e) = adxl.init().await {
-        info!("ADXL375 Init Failed: {}", e);
+        info!("ADXL375 Init Failed: {:?}", e);
+    }
+    if let Err(e) = mag.init().await {
+        info!("LIS3MDL Init Failed: {:?}", e);
+    }
+    if let Err(e) = lsm.init().await {
+        info!("LSM6DSOX Init Failed: {:?}", e);
     }
 
-    let mut ticker = Ticker::every(Duration::from_hz(10));
+    let mut ticker = Ticker::every(Duration::from_hz(100));
+    let mut test_counter: u32 = 0;
+
+    // Track "Health" metrics
+    let mut adxl_error_level = 0u8;
+    let mut lsm_error_level = 0u8;
+    let mut mag_error_level = 0u8;
 
     loop {
-        // In a rocket, timing is everything. Read High-G first during boost.
-        match adxl.read().await {
-            Ok(mgs) => {
-                ImuManager::log_imu_row("HI-G [mG]", mgs);
+        let mut imu_data = IMUData::new();
+        let start_bus = Instant::now();
+        test_counter += 1;
+
+        // 1. Test ADXL375
+        if let Ok(adxl_data) = adxl.read().await {
+            imu_data.accel_high_g = adxl_data;
+            // Slowly clear the error counter on success
+            adxl_error_level = adxl_error_level.saturating_sub(1);
+        } else {
+            // Increase the error level on failure
+            // Increase by 5 to make it sensitive
+            adxl_error_level = adxl_error_level.saturating_add(5);
+        }
+
+        // 2. Test LSM6DSOX
+        if let Ok((lsm_data, gyro_data)) = lsm.read().await {
+            imu_data.accel_low_g = lsm_data;
+            imu_data.gyro = gyro_data;
+            // Slowly clear the error counter on success
+            lsm_error_level = lsm_error_level.saturating_sub(1);
+        } else {
+            // Increase the error level on failure
+            // Increase by 5 to make it sensitive
+            lsm_error_level = lsm_error_level.saturating_add(5);
+        }
+
+        // 3. Test Magnetometer (Uses the DRDY check we wrote)
+        match mag.read().await {
+            Ok(data) => {
+                imu_data.mag = data;
+                mag_error_level = mag_error_level.saturating_sub(1);
             }
-            Err(e) => {
-                info!("ADXL Read Error: {}", e);
+            Err(SensorError::DataNotReady) => {
+                // Magnetometer data rate is 80Hz.
+                // It won't be ready 20% of the time.
+                // Do nothing. Don't punish the health score.
+            }
+            Err(_) => {
+                // This is a real I2C NACK or Timeout.
+                mag_error_level = mag_error_level.saturating_add(5); // Weight real errors more heavily
             }
         }
 
-        // Read LSM6DSOX for orientation
-        // if let Ok(data) = lsm.read_all().await { ... }
+        let end_bus = Instant::now();
+        let bus_time = end_bus - start_bus;
+        let utilization: u8 = ((bus_time.as_micros() * 100) / 10_000) as u8;
+
+        // Every 1 second (100 ticks @ 100Hz), print the "Heartbeat"
+        if test_counter >= 100 {
+            info!(
+                "IMU Error Level: ADXL: {} | LSM: {} | MAG: {}",
+                adxl_error_level, lsm_error_level, mag_error_level
+            );
+            info!("Bus Utilization: {}%", utilization);
+            let total_error_level: u32 =
+                adxl_error_level as u32 + lsm_error_level as u32 + mag_error_level as u32;
+            let imu_error_level = IMUHealth::new_from_readings(
+                adxl_error_level,
+                lsm_error_level,
+                mag_error_level,
+                total_error_level,
+                utilization,
+            );
+            SENSOR_DATA.imu_health.update(imu_error_level);
+
+            // Brute-force print the last valid readings
+            ImuManager::log_imu_row("HI-G ", imu_data.accel_high_g);
+            ImuManager::log_imu_row("LOW-G", imu_data.accel_low_g);
+            ImuManager::log_imu_row("GYRO ", imu_data.gyro);
+            ImuManager::log_imu_row("MAG  ", imu_data.mag);
+
+            // Reset metrics for the next second
+            test_counter = 0;
+        }
+
+        SENSOR_DATA.imu.update(imu_data);
         ticker.next().await;
     }
 }
