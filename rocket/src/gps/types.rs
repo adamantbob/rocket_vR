@@ -1,3 +1,5 @@
+use embassy_time::Instant;
+
 /// Telemetry data captured from the GPS module.
 /// All fields use fixed-point integer arithmetic to ensure high-speed,
 /// deterministic performance without floating-point rounding errors.

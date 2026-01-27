@@ -1,3 +1,4 @@
+use crate::log_triad_fixed_width;
 use crate::state_machine::SENSOR_DATA;
 use crate::{IMU, IMUResources, Irqs, info};
 use embassy_embedded_hal::shared_bus::asynch::i2c::I2cDevice;
@@ -131,11 +132,11 @@ pub async fn imu_task(r: IMUResources, irqs: Irqs) -> ! {
             );
             SENSOR_DATA.imu_health.update(imu_error_level);
 
-            // Brute-force print the last valid readings
-            ImuManager::log_imu_row("HI-G ", imu_data.accel_high_g);
-            ImuManager::log_imu_row("LOW-G", imu_data.accel_low_g);
-            ImuManager::log_imu_row("GYRO ", imu_data.gyro);
-            ImuManager::log_imu_row("MAG  ", imu_data.mag);
+            // Print the last valid readings
+            log_triad_fixed_width!("HI-G ", imu_data.accel_high_g);
+            log_triad_fixed_width!("LOW-G", imu_data.accel_low_g);
+            log_triad_fixed_width!("GYRO ", imu_data.gyro);
+            log_triad_fixed_width!("MAG  ", imu_data.mag);
 
             // Reset metrics for the next second
             test_counter = 0;
@@ -227,47 +228,5 @@ impl ImuManager {
                 break;
             }
         }
-    }
-    fn log_imu_row(label: &str, m_units: [i32; 3]) {
-        // We process each axis into (Sign, Whole, Milli)
-        // To avoid the {:03} hint, we break the milli-part into 3 separate digits
-
-        let mut parts = [(0i32, 0i32, 0i32, 0i32, 0i32); 3];
-
-        for i in 0..3 {
-            let val = m_units[i];
-            let sign = if val < 0 { 1 } else { 0 }; // 1 for '-', 0 for ' '
-            let abs_val = val.abs();
-            let whole = abs_val / 1000;
-            let rem = abs_val % 1000;
-
-            let d1 = rem / 100; // Hundreds place
-            let d2 = (rem / 10) % 10; // Tens place
-            let d3 = rem % 10; // Units place
-
-            parts[i] = (sign, whole, d1, d2, d3);
-        }
-
-        // Now we print using only the simplest {} display trait
-        // Each axis gets: [SignChar][Whole].[D1][D2][D3]
-        info!(
-            "{} | X:{}{}.{}{}{} | Y:{}{}.{}{}{} | Z:{}{}.{}{}{}",
-            label,
-            if parts[0].0 == 1 { "-" } else { " " },
-            parts[0].1,
-            parts[0].2,
-            parts[0].3,
-            parts[0].4,
-            if parts[1].0 == 1 { "-" } else { " " },
-            parts[1].1,
-            parts[1].2,
-            parts[1].3,
-            parts[1].4,
-            if parts[2].0 == 1 { "-" } else { " " },
-            parts[2].1,
-            parts[2].2,
-            parts[2].3,
-            parts[2].4
-        );
     }
 }
