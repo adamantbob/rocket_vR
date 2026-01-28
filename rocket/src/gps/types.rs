@@ -73,3 +73,10 @@ impl Default for GPSData {
         Self::new()
     }
 }
+
+pub struct GPSHealth {
+    pub checksum_errors: u8,
+    pub parse_errors: u8,
+    pub last_fix_age_ms: u32,
+    pub is_healthy: bool,
+}
