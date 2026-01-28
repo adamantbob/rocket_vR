@@ -1,25 +1,26 @@
+use embassy_time::Instant;
+
 #[derive(Debug, Clone, Copy, PartialEq, defmt::Format)]
 pub enum SensorError {
-    /// Everything is fine.
-    None,
     /// The sensor is responding, but new data isn't ready yet (e.g., Mag at 100Hz).
     DataNotReady,
     /// The I2C bus failed (NACK, timeout, or arbitration lost).
     BusError,
     /// The sensor ID is wrong or it's not responding at all.
     DeviceMissing,
+    /// The sensor read timed out.
+    Timeout,
 }
 
 /// Represents a synchronized snapshot of all IMU sensors on the I2C bus.
 ///
 /// All physical values use fixed-point arithmetic (milli-units) to avoid
 /// floating-point overhead on the RP2350 and to maintain precision.
-#[derive(Debug, Copy, Clone, Default)]
-#[cfg_attr(feature = "defmt", derive(defmt::Format))]
+#[derive(Debug, Copy, Clone, defmt::Format)]
 pub struct IMUData {
-    /// Milliseconds since system boot.
+    /// Instant since system boot.
     /// Used for delta-time (dt) calculations in integration filters.
-    pub timestamp_ms: u64,
+    pub timestamp_ms: Instant,
 
     /// High-Range Acceleration (ADXL375) in milli-Gs (mG).
     /// Range: +/- 200,000 mG. Resolution: 49 mG.
@@ -45,7 +46,7 @@ pub struct IMUData {
 impl IMUData {
     pub const fn new() -> Self {
         Self {
-            timestamp_ms: 0,
+            timestamp_ms: Instant::from_ticks(0),
             accel_high_g: [0; 3],
             accel_low_g: [0; 3],
             gyro: [0; 3],
@@ -54,9 +55,15 @@ impl IMUData {
     }
 }
 
+impl Default for IMUData {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 /// Tracks the communication integrity of the IMU sensors.
 /// Updated at a lower frequency (e.g., 1Hz) to provide stability metrics.
-#[derive(Debug, Clone, Copy, Default, defmt::Format)]
+#[derive(Debug, Clone, Copy, defmt::Format)]
 pub struct IMUHealth {
     /// Percentage of successful reads for the High-G sensor.
     pub adxl_health: u8,
@@ -94,5 +101,11 @@ impl IMUHealth {
             total_bus_errors,
             bus_utilization,
         }
+    }
+}
+
+impl Default for IMUHealth {
+    fn default() -> Self {
+        Self::new()
     }
 }

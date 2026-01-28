@@ -1,8 +1,7 @@
 use crate::datacells::{DataCell, FlightState, PersistentData};
-use crate::gps::types::GPSData;
+use crate::gps::types::{GPSData, GPSHealth};
 use crate::imu::types::{IMUData, IMUHealth};
 use crate::{StateMachine, error, info};
-use core::cell::Cell;
 use embassy_time::{Duration, Instant, Ticker, Timer};
 use heapless::Vec;
 use proc_macros::tracked_task;
@@ -10,6 +9,7 @@ use proc_macros::tracked_task;
 /// The Global Blackboard
 pub struct SensorData {
     pub gps: DataCell<GPSData>,
+    pub gps_health: DataCell<GPSHealth>,
     pub imu: DataCell<IMUData>,
     pub imu_health: DataCell<IMUHealth>,
 }
@@ -18,6 +18,7 @@ pub static SENSOR_DATA: SensorData = SensorData {
     imu: DataCell::new(IMUData::new()),
     imu_health: DataCell::new(IMUHealth::new()),
     gps: DataCell::new(GPSData::new()),
+    gps_health: DataCell::new(GPSHealth::new()),
 };
 
 // State Machine Task.

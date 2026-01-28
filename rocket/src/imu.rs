@@ -2,11 +2,11 @@ use crate::log_triad_fixed_width;
 use crate::state_machine::SENSOR_DATA;
 use crate::{IMU, IMUResources, Irqs, info};
 use embassy_embedded_hal::shared_bus::asynch::i2c::I2cDevice;
-use embassy_rp::gpio::{Level, Output, Pin};
+use embassy_rp::gpio::{Level, Output};
 use embassy_rp::i2c::{Async, I2c};
 use embassy_sync::blocking_mutex::raw::NoopRawMutex;
 use embassy_sync::mutex::Mutex;
-use embassy_time::{Duration, Instant, Ticker, Timer, with_timeout};
+use embassy_time::{Duration, Instant, Ticker, with_timeout};
 use proc_macros::tracked_task;
 use static_cell::StaticCell;
 
@@ -17,8 +17,6 @@ mod lism6dsox;
 pub mod types;
 use crate::imu::types::*;
 
-pub struct ImuManager;
-
 #[tracked_task(IMU)]
 #[embassy_executor::task]
 pub async fn imu_task(r: IMUResources, irqs: Irqs) -> ! {
@@ -26,10 +24,10 @@ pub async fn imu_task(r: IMUResources, irqs: Irqs) -> ! {
     let mut config = embassy_rp::i2c::Config::default();
     config.frequency = 400_000; // Fast mode for 100Hz+ sampling
 
-    ImuManager::recover_bus(9, 8).await;
+    recover_bus(9, 8).await;
     let mut i2c_bus = I2c::new_async(r.i2c, r.scl, r.sda, irqs, config);
 
-    ImuManager::verify_bus(&mut i2c_bus).await;
+    verify_bus(&mut i2c_bus).await;
 
     // 2. Wrap the bus in a Mutex to allow sharing
     static I2C_BUS: StaticCell<
@@ -46,9 +44,50 @@ pub async fn imu_task(r: IMUResources, irqs: Irqs) -> ! {
     let mag_dev = I2cDevice::new(i2c_mutex_ref);
     let mut mag = lis3mdl::Lis3mdl::new(mag_dev);
 
+    // Track "Health" metrics
+    let mut adxl_error_level = 0u8;
+    let mut lsm_error_level = 0u8;
+    let mut mag_error_level = 0u8;
+
     // 4. Initialize Sensor Drivers
-    if let Err(e) = adxl.init().await {
-        info!("ADXL375 Init Failed: {:?}", e);
+    match with_timeout(Duration::from_millis(50), adxl.init()).await {
+        Ok(Ok(_)) => {
+            info!("ADXL375 Online");
+        }
+        Ok(Err(e)) => {
+            info!("ADXL375 Hardware Error: {:?}", e);
+            adxl_error_level = 255;
+        }
+        Err(_) => {
+            info!("ADXL375 Initialization Timed Out - check wiring/power");
+            adxl_error_level = 255;
+        }
+    }
+    match with_timeout(Duration::from_millis(50), mag.init()).await {
+        Ok(Ok(_)) => {
+            info!("LIS3MDL Online");
+        }
+        Ok(Err(e)) => {
+            info!("LIS3MDL Hardware Error: {:?}", e);
+            mag_error_level = 255;
+        }
+        Err(_) => {
+            info!("LIS3MDL Initialization Timed Out - check wiring/power");
+            mag_error_level = 255;
+        }
+    }
+    match with_timeout(Duration::from_millis(50), lsm.init()).await {
+        Ok(Ok(_)) => {
+            info!("LSM6DSOX Online");
+        }
+        Ok(Err(e)) => {
+            info!("LSM6DSOX Hardware Error: {:?}", e);
+            lsm_error_level = 255;
+        }
+        Err(_) => {
+            info!("LSM6DSOX Initialization Timed Out - check wiring/power");
+            lsm_error_level = 255;
+        }
     }
     if let Err(e) = mag.init().await {
         info!("LIS3MDL Init Failed: {:?}", e);
@@ -59,11 +98,6 @@ pub async fn imu_task(r: IMUResources, irqs: Irqs) -> ! {
 
     let mut ticker = Ticker::every(Duration::from_hz(100));
     let mut test_counter: u32 = 0;
-
-    // Track "Health" metrics
-    let mut adxl_error_level = 0u8;
-    let mut lsm_error_level = 0u8;
-    let mut mag_error_level = 0u8;
 
     loop {
         let mut imu_data = IMUData::new();
@@ -147,86 +181,84 @@ pub async fn imu_task(r: IMUResources, irqs: Irqs) -> ! {
     }
 }
 
-impl ImuManager {
-    pub async fn verify_bus(i2c: &mut I2c<'_, embassy_rp::peripherals::I2C0, Async>) {
-        info!("Starting I2C Sensor Discovery on I2C0...");
+async fn verify_bus(i2c: &mut I2c<'_, embassy_rp::peripherals::I2C0, Async>) {
+    info!("Starting I2C Sensor Discovery on I2C0...");
 
-        // 1. Check LSM6DSOX (Addr: 0x6A or 0x6B)
-        // Register 0x0F should return 0x6C
-        if let Ok(id) = Self::read_reg(i2c, 0x6A, 0x0F).await {
-            info!("LSM6DSOX found! ID: 0x{:02x} (Expected 0x6c)", id);
-        } else {
-            info!("LSM6DSOX not found at 0x6A.");
-        }
-
-        // 2. Check LIS3MDL (Addr: 0x1C or 0x1E)
-        // Register 0x0F should return 0x3D
-        if let Ok(id) = Self::read_reg(i2c, 0x1C, 0x0F).await {
-            info!("LIS3MDL found! ID: 0x{:02x} (Expected 0x3d)", id);
-        } else {
-            info!("LIS3MDL not found at 0x1C.");
-        }
-
-        // 3. Check ADXL375 (Addr: 0x53 or 0x1D)
-        // Register 0x00 should return 0xE5
-        if let Ok(id) = Self::read_reg(i2c, 0x53, 0x00).await {
-            info!("ADXL375 found! ID: 0x{:02x} (Expected 0xe5)", id);
-        } else {
-            info!("ADXL375 not found at 0x53.");
-        }
+    // 1. Check LSM6DSOX (Addr: 0x6A or 0x6B)
+    // Register 0x0F should return 0x6C
+    if let Ok(id) = read_reg(i2c, 0x6A, 0x0F).await {
+        info!("LSM6DSOX found! ID: 0x{:02x} (Expected 0x6c)", id);
+    } else {
+        info!("LSM6DSOX not found at 0x6A.");
     }
 
-    async fn read_reg(
-        i2c: &mut I2c<'_, embassy_rp::peripherals::I2C0, Async>,
-        addr: u8,
-        reg: u8,
-    ) -> Result<u8, &'static str> {
-        let mut read_buf = [0u8; 1];
-
-        // Wrap the I2C operation in a 50ms timeout
-        match with_timeout(
-            Duration::from_millis(50),
-            i2c.write_read_async(addr, [reg], &mut read_buf),
-        )
-        .await
-        {
-            Ok(Ok(_)) => Ok(read_buf[0]),
-            Ok(Err(_)) => Err("I2C Error (NACK/Bus)"),
-            Err(_) => Err("I2C Timeout (Bus Hung)"),
-        }
+    // 2. Check LIS3MDL (Addr: 0x1C or 0x1E)
+    // Register 0x0F should return 0x3D
+    if let Ok(id) = read_reg(i2c, 0x1C, 0x0F).await {
+        info!("LIS3MDL found! ID: 0x{:02x} (Expected 0x3d)", id);
+    } else {
+        info!("LIS3MDL not found at 0x1C.");
     }
 
-    pub async fn recover_bus(scl_pin: u8, sda_pin: u8) {
-        // We use "any_pin" to temporarily take control of the pins
-        // This assumes you pass the pin numbers (e.g., 9 for SCL, 8 for SDA)
-        let mut scl = Output::new(
-            unsafe { embassy_rp::gpio::AnyPin::steal(scl_pin) },
-            Level::High,
-        );
-        let sda = embassy_rp::gpio::Input::new(
-            unsafe { embassy_rp::gpio::AnyPin::steal(sda_pin) },
-            embassy_rp::gpio::Pull::Up,
-        );
+    // 3. Check ADXL375 (Addr: 0x53 or 0x1D)
+    // Register 0x00 should return 0xE5
+    if let Ok(id) = read_reg(i2c, 0x53, 0x00).await {
+        info!("ADXL375 found! ID: 0x{:02x} (Expected 0xe5)", id);
+    } else {
+        info!("ADXL375 not found at 0x53.");
+    }
+}
 
-        // If SDA is already high, the bus is fine
+async fn read_reg(
+    i2c: &mut I2c<'_, embassy_rp::peripherals::I2C0, Async>,
+    addr: u8,
+    reg: u8,
+) -> Result<u8, &'static str> {
+    let mut read_buf = [0u8; 1];
+
+    // Wrap the I2C operation in a 50ms timeout
+    match with_timeout(
+        Duration::from_millis(50),
+        i2c.write_read_async(addr, [reg], &mut read_buf),
+    )
+    .await
+    {
+        Ok(Ok(_)) => Ok(read_buf[0]),
+        Ok(Err(_)) => Err("I2C Error (NACK/Bus)"),
+        Err(_) => Err("I2C Timeout (Bus Hung)"),
+    }
+}
+
+async fn recover_bus(scl_pin: u8, sda_pin: u8) {
+    // We use "any_pin" to temporarily take control of the pins
+    // This assumes you pass the pin numbers (e.g., 9 for SCL, 8 for SDA)
+    let mut scl = Output::new(
+        unsafe { embassy_rp::gpio::AnyPin::steal(scl_pin) },
+        Level::High,
+    );
+    let sda = embassy_rp::gpio::Input::new(
+        unsafe { embassy_rp::gpio::AnyPin::steal(sda_pin) },
+        embassy_rp::gpio::Pull::Up,
+    );
+
+    // If SDA is already high, the bus is fine
+    if sda.is_high() {
+        return;
+    }
+
+    info!("I2C Bus hung low! Attempting recovery...");
+
+    // Clock the SCL line 9 times
+    for _ in 0..9 {
+        scl.set_low();
+        embassy_time::Timer::after_micros(5).await;
+        scl.set_high();
+        embassy_time::Timer::after_micros(5).await;
+
+        // If the sensor releases the line, we can stop
         if sda.is_high() {
-            return;
-        }
-
-        info!("I2C Bus hung low! Attempting recovery...");
-
-        // Clock the SCL line 9 times
-        for _ in 0..9 {
-            scl.set_low();
-            embassy_time::Timer::after_micros(5).await;
-            scl.set_high();
-            embassy_time::Timer::after_micros(5).await;
-
-            // If the sensor releases the line, we can stop
-            if sda.is_high() {
-                info!("Bus recovered.");
-                break;
-            }
+            info!("Bus recovered.");
+            break;
         }
     }
 }

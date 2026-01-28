@@ -1,5 +1,13 @@
 use embassy_time::Instant;
 
+#[derive(Debug, Clone, Copy, PartialEq, defmt::Format)]
+pub enum SensorError {
+    /// The sensor data is invalid.
+    InvalidData,
+    /// The sensor data is invalid.
+    InvalidChecksum,
+}
+
 /// Telemetry data captured from the GPS module.
 /// All fields use fixed-point integer arithmetic to ensure high-speed,
 /// deterministic performance without floating-point rounding errors.
@@ -74,9 +82,27 @@ impl Default for GPSData {
     }
 }
 
+#[derive(Debug, Clone, Copy, defmt::Format)]
 pub struct GPSHealth {
     pub checksum_errors: u8,
     pub parse_errors: u8,
-    pub last_fix_age_ms: u32,
-    pub is_healthy: bool,
+    pub last_fix_age_ms: Instant,
+    pub receive_timeout: u8,
+}
+
+impl GPSHealth {
+    pub const fn new() -> Self {
+        Self {
+            checksum_errors: 0,
+            parse_errors: 0,
+            last_fix_age_ms: Instant::from_ticks(0),
+            receive_timeout: 0,
+        }
+    }
+}
+
+impl Default for GPSHealth {
+    fn default() -> Self {
+        Self::new()
+    }
 }
