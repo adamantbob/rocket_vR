@@ -1,5 +1,5 @@
 [workspace]
-members = ["rocket", "rocket-core", "proc-macros"]
+members = ["rocket", "rocket-core", "proc-macros", "rocket-sitl-ksp"]
 resolver = "2"
 
 # Use ths s optimization for speed optimization. 
