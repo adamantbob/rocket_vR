@@ -1,10 +1,9 @@
 use crate::datacells::{DataCell, FlightState, PersistentData};
-use crate::gps::types::{GPSData, GPSHealth};
-use crate::imu::types::{IMUData, IMUHealth};
 use crate::{StateMachine, error, info};
 use embassy_time::{Duration, Instant, Ticker, Timer};
 use heapless::Vec;
 use proc_macros::tracked_task;
+use rocket_core::{GPSData, GPSHealth, IMUData, IMUHealth, RocketStateMachine};
 
 /// The Global Blackboard
 pub struct SensorData {
@@ -79,7 +78,7 @@ pub async fn state_machine_task() {
     // --- MAIN FLIGHT LOOP ---
     loop {
         // 1. Record when we actually started this loop
-        let start_time = Instant::now();
+        let _start_time = Instant::now();
 
         // 2. Perform the logic
         let gps = SENSOR_DATA.gps.read();
@@ -87,11 +86,11 @@ pub async fn state_machine_task() {
         sm.update(gps, imu);
         // In your loop, update this every time the state changes:
 
-        let initial_data = PersistentData {
+        let current_data = PersistentData {
             ground_level: sm.ground_level_mm.unwrap(),
             state: sm.state,
         };
-        crate::datacells::save_flight_data(initial_data);
+        crate::datacells::save_flight_data(current_data);
 
         // 3. Wait for the ticker
         ticker.next().await;
@@ -112,94 +111,5 @@ pub async fn state_machine_task() {
 
         // Advance our internal clock for the next check
         next_expected_tick += Duration::from_hz(100);
-    }
-}
-
-const MIN_FLIGHT_ALTITUDE_MM: i32 = 50_000; // 50 Meters
-const LAUNCH_VELOCITY_THRESHOLD_MMS: i32 = 15_000; // 15 m/s
-
-pub struct RocketStateMachine {
-    pub state: FlightState,
-    pub last_altitude_mm: i32,
-    pub max_altitude_mm: i32,
-    pub apogee_detect_count: u8,
-    pub safety_armed: bool, // The "Safety Lock"
-    /// Ground level altitude captured before launch.
-    /// None = Not yet determined.
-    pub ground_level_mm: Option<i32>,
-}
-
-impl RocketStateMachine {
-    pub const fn new() -> Self {
-        Self {
-            state: FlightState::Initializing,
-            last_altitude_mm: 0,
-            max_altitude_mm: 0,
-            apogee_detect_count: 0,
-            safety_armed: false,
-            ground_level_mm: None,
-        }
-    }
-
-    pub fn update(&mut self, gps_data: GPSData, _imu_data: IMUData) {
-        // Track the highest point reached regardless of state
-        if gps_data.raw_alt_mm > self.max_altitude_mm {
-            self.max_altitude_mm = gps_data.raw_alt_mm;
-        }
-
-        // Arm the safety if we are high enough and moving
-        if !self.safety_armed && gps_data.raw_alt_mm > MIN_FLIGHT_ALTITUDE_MM {
-            self.safety_armed = true;
-            // info!("Safety Disengaged: Recovery systems ARMED");
-        }
-
-        match self.state {
-            FlightState::Initializing => {
-                // We should never be here. The Initialization phase is handled entirely
-                // in the task in order to keep the memory scope as small as possible.
-                unreachable!();
-            }
-            FlightState::GroundIdle => {
-                if gps_data.fix_valid && gps_data.speed_mm_per_sec > LAUNCH_VELOCITY_THRESHOLD_MMS {
-                    self.state = FlightState::PoweredFlight;
-                }
-                if gps_data.fix_valid && self.ground_level_mm.is_none() {
-                    self.ground_level_mm = Some(gps_data.raw_alt_mm);
-                }
-
-                // Then check safety against ground:
-                if gps_data.raw_alt_mm > (self.ground_level_mm.unwrap() + MIN_FLIGHT_ALTITUDE_MM) {
-                    self.safety_armed = true;
-                }
-            }
-            FlightState::PoweredFlight => {
-                // Transition to coasting when we stop accelerating
-                if gps_data.speed_mm_per_sec < (self.last_altitude_mm) {
-                    // Simplified
-                    self.state = FlightState::Coasting;
-                }
-            }
-            FlightState::Coasting => {
-                // Only allow Apogee detection if we are above the safety floor
-                if self.safety_armed {
-                    if gps_data.raw_alt_mm < self.max_altitude_mm - 2000 {
-                        // 2m drop
-                        self.apogee_detect_count += 1;
-                        if self.apogee_detect_count > 5 {
-                            self.state = FlightState::ApogeeReached;
-                        }
-                    } else {
-                        self.apogee_detect_count = 0;
-                    }
-                }
-            }
-            FlightState::ApogeeReached => {
-                // LOGIC: Fire Pyro Ejection Charge Here
-                self.state = FlightState::Descent;
-            }
-            // ... rest of states ...
-            _ => {}
-        }
-        self.last_altitude_mm = gps_data.raw_alt_mm;
     }
 }

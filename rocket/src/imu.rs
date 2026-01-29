@@ -14,8 +14,7 @@ use static_cell::StaticCell;
 mod adxl375;
 mod lis3mdl;
 mod lism6dsox;
-pub mod types;
-use crate::imu::types::*;
+use rocket_core::{IMUData, IMUHealth, IMUSensorError};
 
 #[tracked_task(IMU)]
 #[embassy_executor::task]
@@ -133,7 +132,7 @@ pub async fn imu_task(r: IMUResources, irqs: Irqs) -> ! {
                 imu_data.mag = data;
                 mag_error_level = mag_error_level.saturating_sub(1);
             }
-            Err(SensorError::DataNotReady) => {
+            Err(IMUSensorError::DataNotReady) => {
                 // Magnetometer data rate is 80Hz.
                 // It won't be ready 20% of the time.
                 // Do nothing. Don't punish the health score.

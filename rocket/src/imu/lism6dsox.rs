@@ -1,10 +1,10 @@
-use crate::imu::types::SensorError;
 use crate::info;
 use embassy_embedded_hal::shared_bus::asynch::i2c::I2cDevice;
 use embassy_rp::i2c::{Async, I2c as RpI2c};
 use embassy_rp::peripherals::I2C0;
 use embassy_sync::blocking_mutex::raw::NoopRawMutex;
 use embedded_hal_async::i2c::I2c as AsyncI2c;
+use rocket_core::IMUSensorError;
 
 type SharedI2c0 = I2cDevice<'static, NoopRawMutex, RpI2c<'static, I2C0, Async>>;
 
@@ -20,41 +20,41 @@ impl Lsm6dsox {
         Self { i2c: i2c_dev }
     }
 
-    pub async fn init(&mut self) -> Result<(), SensorError> {
+    pub async fn init(&mut self) -> Result<(), IMUSensorError> {
         // 1. WHO_AM_I (0x0F) -> Expected 0x6C
         let mut id = [0u8; 1];
         AsyncI2c::write_read(&mut self.i2c, Self::ADDR, &[0x0F], &mut id)
             .await
-            .map_err(|_| SensorError::BusError)?;
+            .map_err(|_| IMUSensorError::BusError)?;
 
         if id[0] != 0x6C {
-            return Err(SensorError::DeviceMissing);
+            return Err(IMUSensorError::DeviceMissing);
         }
 
         // 2. CTRL1_XL (0x10): Set Accel to 104Hz, +/- 16g range
         // 0x44 = 0100 (104Hz) 01 (16g) 00 (Filter)
         AsyncI2c::write(&mut self.i2c, Self::ADDR, &[0x10, 0x44])
             .await
-            .map_err(|_| SensorError::BusError)?;
+            .map_err(|_| IMUSensorError::BusError)?;
 
         // 3. CTRL2_G (0x11): Set Gyro to 104Hz, 2000 dps range
         // 0x4C = 0100 (104Hz) 1100 (2000dps)
         AsyncI2c::write(&mut self.i2c, Self::ADDR, &[0x11, 0x4C])
             .await
-            .map_err(|_| SensorError::BusError)?;
+            .map_err(|_| IMUSensorError::BusError)?;
 
         info!("LSM6DSOX: Online (+/-16g, 2000dps)");
         Ok(())
     }
 
     /// Reads Accel (mG) and Gyro (mdps) in one burst to ensure sync
-    pub async fn read(&mut self) -> Result<([i32; 3], [i32; 3]), SensorError> {
+    pub async fn read(&mut self) -> Result<([i32; 3], [i32; 3]), IMUSensorError> {
         let mut data = [0u8; 12];
 
         // Burst read starting from 0x22 (Gyro X Low)
         AsyncI2c::write_read(&mut self.i2c, Self::ADDR, &[0x22], &mut data)
             .await
-            .map_err(|_| SensorError::BusError)?;
+            .map_err(|_| IMUSensorError::BusError)?;
 
         // --- Gyro Conversion (mdps) ---
         // Sensitivity @ 2000dps is roughly 70 mdps/LSB
