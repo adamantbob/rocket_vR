@@ -8,13 +8,10 @@ use proc_macros::tracked_task;
 use static_cell::StaticCell;
 use {defmt_rtt as _, panic_probe as _};
 
-mod parser;
-pub mod types;
-mod vertical_kalman;
-
-use crate::gps::parser::{process_line, validate_checksum};
-use crate::gps::types::*;
-use crate::gps::vertical_kalman::VerticalKalman;
+use rocket_core::gps::{
+    GPSData, GPSHealth, VerticalKalman,
+    parser::{process_line, validate_checksum},
+};
 
 /// GPS Module Task
 ///

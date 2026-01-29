@@ -1,3 +1,4 @@
+// gps/vertical_kalman.rs
 pub struct VerticalKalman {
     z: f32,    // Estimated Altitude (m)
     v: f32,    // Estimated Velocity (m/s)
@@ -17,8 +18,8 @@ impl VerticalKalman {
             p_zz: 1.0,
             p_vv: 1.0,
             p_zv: 0.0,
-            r_alt: 2.0,   // GPS is usually noisy
-            q_accel: 0.1, // How much we trust our "constant velocity" model
+            r_alt: 2.0,
+            q_accel: 0.1,
         }
     }
 
@@ -27,26 +28,19 @@ impl VerticalKalman {
         let dt3 = dt2 * dt;
         let dt4 = dt3 * dt;
 
-        // --- 1. Predict ---
         self.z += self.v * dt;
-
-        // Update Error Covariance using simple multiplications
         self.p_zz += dt * (2.0 * self.p_zv + dt * self.p_vv) + 0.25 * dt4 * self.q_accel;
         self.p_zv += dt * self.p_vv + 0.5 * dt3 * self.q_accel;
         self.p_vv += dt2 * self.q_accel;
 
-        // --- 2. Update (Correct with GPS) ---
         let innovation = measured_z - self.z;
-        let s = self.p_zz + self.r_alt; // Innovation covariance
+        let s = self.p_zz + self.r_alt;
+        let k_z = self.p_zz / s;
+        let k_v = self.p_zv / s;
 
-        let k_z = self.p_zz / s; // Kalman Gain for Altitude
-        let k_v = self.p_zv / s; // Kalman Gain for Velocity
-
-        // Apply Gain to State
         self.z += k_z * innovation;
         self.v += k_v * innovation;
 
-        // Update Error Covariance (P = (I - KH)P)
         self.p_zz -= k_z * self.p_zz;
         self.p_zv -= k_z * self.p_zv;
         self.p_vv -= k_v * self.p_zv;
