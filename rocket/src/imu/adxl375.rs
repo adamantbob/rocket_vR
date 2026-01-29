@@ -1,10 +1,11 @@
 // src/imu/adxl375.rs
+use crate::imu::types::SensorError;
 use crate::info;
 use embassy_embedded_hal::shared_bus::asynch::i2c::I2cDevice;
 use embassy_rp::i2c::{Async, I2c as RpI2c};
 use embassy_rp::peripherals::I2C0;
 use embassy_sync::blocking_mutex::raw::NoopRawMutex;
-use embassy_sync::mutex::Mutex;
+use embassy_time::{Duration, with_timeout};
 
 use embedded_hal_async::i2c::I2c as AsyncI2c;
 
@@ -16,47 +17,80 @@ pub struct Adxl375 {
 
 impl Adxl375 {
     const ADDR: u8 = 0x53;
+    const DEVID: u8 = 0x00;
+    const BW_RATE: u8 = 0x2C;
+    const POWER_CTL: u8 = 0x2D;
+    const DATA_FORMAT: u8 = 0x31;
+    const DATAX0: u8 = 0x32;
+    const FIFO_CTL: u8 = 0x38;
 
     pub fn new(i2c_dev: SharedI2c0) -> Self {
         Self { i2c: i2c_dev }
     }
 
-    pub async fn init(&mut self) -> Result<(), &'static str> {
-        // Register 0x31 (DATA_FORMAT): 0x0B = Full-Res, +/- 200g
-        AsyncI2c::write(&mut self.i2c, Self::ADDR, &[0x31, 0x0B])
+    pub async fn init(&mut self) -> Result<(), SensorError> {
+        // 1. Identity Check
+        let mut id = [0u8; 1];
+        AsyncI2c::write_read(&mut self.i2c, Self::ADDR, &[Self::DEVID], &mut id)
             .await
-            .map_err(|_| "ADXL: Failed to set Data Format")?;
+            .map_err(|_| SensorError::BusError)?;
 
-        // Register 0x2C (BW_RATE): 0x0D = 800Hz ODR
-        AsyncI2c::write(&mut self.i2c, Self::ADDR, &[0x2C, 0x0D])
+        if id[0] != 0xE5 {
+            return Err(SensorError::DeviceMissing);
+        }
+
+        // 2. Configure Format: +/- 200g, Full-Res
+        // 0x0B = 0b00001011 (Full Res, +/- 200g)
+        AsyncI2c::write(&mut self.i2c, Self::ADDR, &[Self::DATA_FORMAT, 0x0B])
             .await
-            .map_err(|_| "ADXL: Failed to set ODR")?;
+            .map_err(|_| SensorError::BusError)?;
 
-        // Register 0x2D (POWER_CTL): 0x08 = Start measurement
-        AsyncI2c::write(&mut self.i2c, Self::ADDR, &[0x2D, 0x08])
+        // 3. Configure Bandwidth/Rate: 800Hz ODR
+        AsyncI2c::write(&mut self.i2c, Self::ADDR, &[Self::BW_RATE, 0x0D])
             .await
-            .map_err(|_| "ADXL: Failed to start measurement")?;
+            .map_err(|_| SensorError::BusError)?;
 
-        info!("ADXL375: Initialized (200g @ 800Hz)");
+        // 4. FIFO Setup (Optional but recommended): Stream Mode
+        // 0x80 = Stream mode (keeps latest 32 samples)
+        AsyncI2c::write(&mut self.i2c, Self::ADDR, &[Self::FIFO_CTL, 0x80])
+            .await
+            .map_err(|_| SensorError::BusError)?;
+
+        // 5. Start Measurement
+        AsyncI2c::write(&mut self.i2c, Self::ADDR, &[Self::POWER_CTL, 0x08])
+            .await
+            .map_err(|_| SensorError::BusError)?;
+
+        info!("ADXL375: Verified and Armed (+/- 200g)");
         Ok(())
     }
 
-    /// Reads X, Y, and Z acceleration in milli-Gs (mG).
-    /// Returns [x, y, z] as i32 for fixed-point stability.
-    pub async fn read(&mut self) -> Result<[i32; 3], &'static str> {
+    /// Reads raw data and converts to milli-Gs.
+    /// Note: 49mg/LSB is the standard for ADXL375 Full-Res.
+    pub async fn read(&mut self) -> Result<[i32; 3], SensorError> {
         let mut buf = [0u8; 6];
 
-        // Read 6 bytes starting from 0x32
-        AsyncI2c::write_read(&mut self.i2c, Self::ADDR, &[0x32], &mut buf)
-            .await
-            .map_err(|_| "ADXL: Read transaction failed")?;
+        // Wrap the I2C transaction in a 5ms timeout.
+        // At 400kHz I2C, 6 bytes should take < 200 microseconds.
+        // 5ms is plenty of breathing room but fast enough to recover.
+        let result = with_timeout(
+            Duration::from_millis(5),
+            AsyncI2c::write_read(&mut self.i2c, Self::ADDR, &[Self::DATAX0], &mut buf),
+        )
+        .await;
 
-        // Conversion: Raw LSBs * 49 mG/LSB
-        // We cast to i32 immediately to prevent overflow during multiplication
-        let x = (i16::from_le_bytes([buf[0], buf[1]]) as i32) * 49;
-        let y = (i16::from_le_bytes([buf[2], buf[3]]) as i32) * 49;
-        let z = (i16::from_le_bytes([buf[4], buf[5]]) as i32) * 49;
-
-        Ok([x, y, z])
+        match result {
+            Ok(Ok(_)) => {
+                let x = i16::from_le_bytes([buf[0], buf[1]]) as i32;
+                let y = i16::from_le_bytes([buf[2], buf[3]]) as i32;
+                let z = i16::from_le_bytes([buf[4], buf[5]]) as i32;
+                Ok([x * 49, y * 49, z * 49])
+            }
+            Ok(Err(_)) => Err(SensorError::BusError), // Physical I2C error (NACK, etc.)
+            Err(_) => {
+                info!("ADXL375: I2C Timeout!");
+                Err(SensorError::Timeout) // Bus hung or device non-responsive
+            }
+        }
     }
 }
