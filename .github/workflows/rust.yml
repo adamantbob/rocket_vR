@@ -15,10 +15,12 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-    - uses: actions/checkout@v4
-    - name: Build
+    - name: Install Rust Toolchain
       run: |
         rustup target add thumbv8m.main-none-eabihf # For Pico 2
         rustup target add thumbv6m-none-eabi        # For Pico
+    - uses: actions/checkout@v4
+    - name: Build
+      run: |
         cargo build-pico --verbose
         cargo build-pico2 --verbose
