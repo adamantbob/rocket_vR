@@ -209,7 +209,9 @@ fn handle_full_sentence(
 
         // Update data structure with filtered estimates
         pos_data.alt_agl_m = est_alt;
-        pos_data.velocity_z = est_vel;
+        pos_data.velocity_z_filt = est_vel;
+        // Convert f32 (m/s) to i32 (mm/s) for the state machine
+        pos_data.velocity_z_mms = (est_vel * 1000.0) as i32;
     }
 
     // Commit final data to the global state

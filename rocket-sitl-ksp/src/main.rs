@@ -1,5 +1,6 @@
 use krpc_client::{Client, services::space_center::SpaceCenter};
-use rocket_core::{GPSData, IMUData, RocketStateMachine};
+use rocket_core::{FlightState, GPSData, IMUData, RocketStateMachine};
+use std::io::Write;
 use std::thread::sleep;
 use std::time::Duration;
 
@@ -40,11 +41,13 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         "\nCalibration complete: {:.1}m. Ready for launch!",
         ground_level
     );
+    let mut loop_count = 0;
 
     loop {
+        loop_count += 1;
         // 1. Gather Telemetry
         let altitude = flight.get_mean_altitude()?;
-        let v_speed = flight.get_vertical_speed()?;
+        let v_speed = flight.get_vertical_speed()?; // Signed vertical speed from KSP
         let g_force = flight.get_g_force()?;
 
         // 2. Map to rocket-core types
@@ -52,6 +55,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         gps_data.fix_valid = true;
         gps_data.raw_alt_mm = (altitude * 1000.0) as i32;
         gps_data.speed_mm_per_sec = (v_speed.abs() * 1000.0) as i32;
+        gps_data.velocity_z_mms = (v_speed * 1000.0) as i32;
+        gps_data.velocity_z_filt = v_speed as f32;
 
         let mut imu_data = IMUData::new();
         imu_data.accel_high_g[2] = (g_force * 1000.0) as i32;
@@ -62,16 +67,22 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
         if sm.state != old_state {
             println!("\nSTATE CHANGE: {:?} -> {:?}", old_state, sm.state);
+            print!(
+                "\rAlt: {:.1}m | V-Speed: {:.1}m/s | State: {:?}",
+                altitude, v_speed, sm.state
+            );
+            std::io::stdout().flush()?;
         }
 
-        // 4. Output Status
-        print!(
-            "\rAlt: {:.1}m | V-Speed: {:.1}m/s | State: {:?}",
-            altitude, v_speed, sm.state
-        );
-        use std::io::{Write, stdout};
-        stdout().flush()?;
+        // 4. Output Status (at 10Hz)
+        if loop_count % 10 == 0 {
+            print!(
+                "\rAlt: {:.1}m | V-Speed: {:.1}m/s | State: {:?}",
+                altitude, v_speed, sm.state
+            );
+            std::io::stdout().flush()?;
+        }
 
-        sleep(Duration::from_millis(100)); // 10Hz Update
+        sleep(Duration::from_millis(10)); // 100Hz Update
     }
 }

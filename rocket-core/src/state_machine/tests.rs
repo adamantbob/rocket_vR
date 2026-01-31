@@ -20,11 +20,27 @@ mod tests {
 
         let mut gps = GPSData::new();
         gps.fix_valid = true;
-        gps.speed_mm_per_sec = LAUNCH_VELOCITY_THRESHOLD_MMS + 1000;
+        gps.velocity_z_mms = LAUNCH_VELOCITY_THRESHOLD_MMS + 500;
         gps.raw_alt_mm = 1000;
 
         sm.update(gps, IMUData::new());
         assert_eq!(sm.state, FlightState::PoweredFlight);
+    }
+
+    #[test]
+    fn test_burnout_detection() {
+        let mut sm = RocketStateMachine::new();
+        sm.state = FlightState::PoweredFlight;
+        sm.last_velocity_z_mms = 50_000; // 50m/s
+
+        let mut gps = GPSData::new();
+        gps.fix_valid = true;
+        gps.velocity_z_mms = 49_800; // 200mm/s drop (2G deceleration over 10ms is too high for burnout logic, let's test a realistic drop)
+        // Actually 100mm/s is our threshold.
+        gps.velocity_z_mms = 49_890; // 110mm/s drop
+
+        sm.update(gps, IMUData::new());
+        assert_eq!(sm.state, FlightState::Coasting);
     }
 
     #[test]
