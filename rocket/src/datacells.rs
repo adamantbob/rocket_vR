@@ -6,31 +6,7 @@ use defmt::info;
 use embassy_sync::blocking_mutex::Mutex;
 use embassy_sync::blocking_mutex::raw::CriticalSectionRawMutex;
 
-/// A generic thread-safe container for Blackboard-style data sharing.
-pub struct DataCell<T: Copy + Default> {
-    storage: Mutex<CriticalSectionRawMutex, Cell<T>>,
-}
-
-impl<T: Copy + Default> DataCell<T> {
-    /// Create a new cell with default values.
-    pub const fn new(init: T) -> Self {
-        Self {
-            storage: Mutex::new(Cell::new(init)),
-        }
-    }
-
-    /// Update the data in the cell (The "Write").
-    pub fn update(&self, data: T) {
-        self.storage.lock(|cell| {
-            cell.set(data);
-        });
-    }
-
-    /// Fetch the latest data from the cell (The "Read").
-    pub fn read(&self) -> T {
-        self.storage.lock(|cell| cell.get())
-    }
-}
+pub use rocket_core::datacells::DataCell;
 
 pub use rocket_core::{FlightState, PersistentData};
 

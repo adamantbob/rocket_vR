@@ -3,7 +3,7 @@ use crate::{StateMachine, error, info};
 use embassy_time::{Duration, Instant, Ticker, Timer};
 use heapless::Vec;
 use proc_macros::tracked_task;
-use rocket_core::{GPSData, GPSHealth, IMUData, IMUHealth, RocketStateMachine};
+use rocket_core::{FlightAction, FlightController, GPSData, GPSHealth, IMUData, IMUHealth};
 
 /// The Global Blackboard
 pub struct SensorData {
@@ -26,7 +26,7 @@ pub static SENSOR_DATA: SensorData = SensorData {
 #[tracked_task(StateMachine)]
 #[embassy_executor::task]
 pub async fn state_machine_task() {
-    let mut sm = RocketStateMachine::new();
+    let mut controller = FlightController::new();
     // Create a ticker set to 100Hz (10ms period)
     let mut ticker = Ticker::every(Duration::from_hz(100));
     // We track the expected time of the NEXT tick
@@ -38,9 +38,9 @@ pub async fn state_machine_task() {
     // This is here if the code crashes a trips the watchdog mid-flight.
     // It will resume the flight from where it left off.
     if let Some(recovered) = crate::datacells::try_recover_flight_data() {
-        sm.ground_level_mm = Some(recovered.ground_level);
-        sm.state = recovered.state;
-        info!("Warm start! Resumed at state: {:?}", sm.state);
+        controller.ground_level_mm = Some(recovered.ground_level);
+        controller.state = recovered.state;
+        info!("Warm start! Resumed at state: {:?}", controller.state);
     } else {
         // --- EXPLICIT CALIBRATION SCOPE ---
         // Here the calibration runs in a dedicated scope
@@ -62,14 +62,13 @@ pub async fn state_machine_task() {
             }
 
             let sum: i32 = calibration_buffer.iter().sum();
-            sm.ground_level_mm = Some(sum / 10);
+            controller.set_ground_reference(sum / 10, 1000); // TODO: Calibrate IMU offset too
 
-            sm.state = FlightState::GroundIdle;
             info!("Calibration complete. Transitioned to GroundIdle.");
         }
         // After calibration is done, initialize the persistence
         let initial_data = PersistentData {
-            ground_level: sm.ground_level_mm.unwrap(),
+            ground_level: controller.ground_level_mm.unwrap(),
             state: FlightState::GroundIdle,
         };
         crate::datacells::save_flight_data(initial_data);
@@ -83,12 +82,29 @@ pub async fn state_machine_task() {
         // 2. Perform the logic
         let gps = SENSOR_DATA.gps.read();
         let imu = SENSOR_DATA.imu.read();
-        sm.update(gps, imu);
-        // In your loop, update this every time the state changes:
+
+        let old_state = controller.state;
+        let (state, action) = controller.update(gps, imu);
+
+        if state != old_state {
+            info!("STATE CHANGE: {:?} -> {:?}", old_state, state);
+        }
+
+        match action {
+            FlightAction::StageNext => {
+                info!("FLIGHT ACTION: StageNext (Burnout detected)");
+                // TODO: Trigger actual hardware pins
+            }
+            FlightAction::DeployParachutes => {
+                info!("FLIGHT ACTION: DeployParachutes (Apogee detected)");
+                // TODO: Trigger actual hardware pins
+            }
+            FlightAction::None => {}
+        }
 
         let current_data = PersistentData {
-            ground_level: sm.ground_level_mm.unwrap(),
-            state: sm.state,
+            ground_level: controller.ground_level_mm.unwrap(),
+            state: controller.state,
         };
         crate::datacells::save_flight_data(current_data);
 
@@ -97,7 +113,7 @@ pub async fn state_machine_task() {
 
         // 4. CRITICAL CHECK: Did we finish too late?
         // If the current time is significantly past when we wanted to wake up,
-        // it means sm.update() or an interrupt took too long.
+        // it means controller.update() or an interrupt took too long.
         let now = Instant::now();
         if now > next_expected_tick + Duration::from_micros(500) {
             // 0.5ms grace period
