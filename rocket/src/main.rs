@@ -108,6 +108,7 @@ bind_interrupts!(pub struct Irqs {
     USBCTRL_IRQ => embassy_rp::usb::InterruptHandler<USB>;
     UART0_IRQ => embassy_rp::uart::BufferedInterruptHandler<UART0>;
     I2C0_IRQ => embassy_rp::i2c::InterruptHandler<I2C0>;
+    DMA_IRQ_0 => embassy_rp::dma::InterruptHandler<embassy_rp::peripherals::DMA_CH0>;
 });
 
 #[tracked_task(Blinky)]

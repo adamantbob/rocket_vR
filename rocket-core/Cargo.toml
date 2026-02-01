@@ -9,8 +9,12 @@ log = "0.4"
 fixed = "1.23.1"
 fixed-macro = "1.2"
 serde = { version = "1.0.203", default-features = false, features = ["derive"] }
-heapless = "0.8"
+heapless = { version = "0.8", features = ["defmt-03"] }
+embassy-sync = { git = "https://github.com/embassy-rs/embassy" }
 
 [features]
 default = []
-defmt = ["dep:defmt"]
+defmt = ["dep:defmt", "heapless/defmt-03"]
+
+[dev-dependencies]
+critical-section = { version = "1.1", features = ["std"] }

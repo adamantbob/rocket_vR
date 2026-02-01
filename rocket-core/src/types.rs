@@ -1,9 +1,10 @@
 // types.rs
 #[repr(u8)]
-#[derive(Debug, Clone, Copy, PartialEq, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Default, serde::Serialize, serde::Deserialize)]
 #[cfg_attr(feature = "defmt", derive(defmt::Format))]
 pub enum FlightState {
-    Initializing = 0,  // GPS Calibration
+    #[default]
+    Initializing = 0, // GPS Calibration
     GroundIdle = 1,    // Waiting on the pad
     PoweredFlight = 2, // Motor is burning, high acceleration
     Coasting = 3,      // Motor out, gaining altitude via momentum
@@ -12,8 +13,18 @@ pub enum FlightState {
     Landed = 6,        // Back on the ground
 }
 
+#[repr(u8)]
+#[derive(Debug, Clone, Copy, PartialEq, Default, serde::Serialize, serde::Deserialize)]
+#[cfg_attr(feature = "defmt", derive(defmt::Format))]
+pub enum FlightAction {
+    #[default]
+    None,
+    StageNext,
+    DeployParachutes,
+}
+
 #[repr(C)]
-#[derive(Clone, Copy, Debug, serde::Serialize, serde::Deserialize)]
+#[derive(Clone, Copy, Debug, Default, serde::Serialize, serde::Deserialize)]
 pub struct PersistentData {
     pub ground_level: i32,
     pub state: FlightState,

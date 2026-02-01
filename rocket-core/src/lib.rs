@@ -1,6 +1,7 @@
 // lib.rs
 #![no_std]
 
+pub mod datacells;
 pub mod gps;
 pub mod imu;
 pub mod state_machine;
