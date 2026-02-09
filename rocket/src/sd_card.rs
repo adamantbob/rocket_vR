@@ -61,7 +61,8 @@ pub async fn sd_card_task(r: SDCardResources, _irqs: Irqs) -> ! {
     }
 
     // 3. Boost SPI frequency for performance after discovery
-    spi.set_frequency(16_000_000);
+    // spi.set_frequency(16_000_000);
+    spi.set_frequency(2_000_000);
 
     // 4. Final Setup: Now we move ownership of 'spi' and 'cs' for the long-running task
     let spi_dev = embedded_hal_bus::spi::ExclusiveDevice::new_no_delay(spi, cs);

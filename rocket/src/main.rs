@@ -17,7 +17,8 @@ use defmt::unwrap;
 use embassy_executor::Spawner;
 use embassy_futures::join::join;
 use embassy_rp::interrupt::{InterruptExt, Priority};
-use embassy_rp::peripherals::{I2C0, PIO0, UART0, USB};
+use embassy_rp::multicore::{Stack, spawn_core1};
+use embassy_rp::peripherals::{DMA_CH0, DMA_CH3, DMA_CH4, I2C0, PIO0, SPI0, UART0, USB};
 use embassy_rp::usb::{Driver, Instance};
 use embassy_rp::{bind_interrupts, interrupt};
 use embassy_time::{Duration, Timer};
@@ -35,6 +36,7 @@ mod datacells;
 mod gps;
 mod imu;
 mod macros;
+mod sd_card;
 mod state_machine;
 mod usb;
 mod utilization;
@@ -44,14 +46,15 @@ use crate::utilization::{TrackedExt, stats_task};
 use crate::wifi::LedState;
 
 define_utilization_tasks!(
-    Stats,
-    Wifi,
-    Blinky,
-    Repl,
-    StateMachine,
-    InitLowPrioTasks,
-    GPS,
-    IMU
+    Stats[0],
+    Wifi[0],
+    Blinky[0],
+    Repl[0],
+    StateMachine[0],
+    InitLowPrioTasks[0],
+    GPS[0],
+    IMU[0],
+    SDCard[1]
 );
 
 assign_resources! {
@@ -78,6 +81,18 @@ assign_resources! {
         scl: PIN_9,
         sda: PIN_8,
     }
+    SDCardResources {
+        spi: SPI0,
+        miso: PIN_16,
+        mosi: PIN_19,
+        clk: PIN_18,
+        cs: PIN_17,
+        dma_tx: DMA_CH3,
+        dma_rx: DMA_CH4,
+    }
+    CoreResources {
+        core1: CORE1,
+    }
 }
 
 #[cfg(feature = "rp2350")]
@@ -103,12 +118,15 @@ pub static PICOTOOL_ENTRIES: [embassy_rp::binary_info::EntryAddr; 4] = [
 ];
 
 // Bind Interrupts to their appropriate interrupt handler
+// Bind Interrupts to their appropriate interrupt handler
 bind_interrupts!(pub struct Irqs {
     PIO0_IRQ_0 => embassy_rp::pio::InterruptHandler<PIO0>;
     USBCTRL_IRQ => embassy_rp::usb::InterruptHandler<USB>;
     UART0_IRQ => embassy_rp::uart::BufferedInterruptHandler<UART0>;
     I2C0_IRQ => embassy_rp::i2c::InterruptHandler<I2C0>;
-    DMA_IRQ_0 => embassy_rp::dma::InterruptHandler<embassy_rp::peripherals::DMA_CH0>;
+    DMA_IRQ_0 => embassy_rp::dma::InterruptHandler<DMA_CH0>,
+                 embassy_rp::dma::InterruptHandler<DMA_CH3>,
+                 embassy_rp::dma::InterruptHandler<DMA_CH4>;
 });
 
 #[tracked_task(Blinky)]
@@ -191,28 +209,40 @@ async fn run_repl<'d, T: Instance + 'd>(
 /// Start each init and move on as we wait for init.
 /// Critical tasks have their own state and will report their status via the
 /// global task status channel.
-#[tracked_task(InitLowPrioTasks)]
 #[embassy_executor::task]
-async fn init_low_prio_tasks(spawner: Spawner, p: embassy_rp::Peripherals) {
-    spawner.spawn(unwrap!(stats_task(TASK_NAMES, Stats)));
+pub async fn init_low_prio_tasks(
+    spawner: Spawner,
+    wifi: WifiResources,
+    usb: USBResources,
+    gps: GPSResources,
+    imu: IMUResources,
+) {
+    // 1. Initialize USB: It returns a class and a future to run.
+    let (mut class, usb_runner) = usb::setup_usb(usb.usb);
 
-    let r = AssignedResources::take(p);
+    // 2. Spawn Hardware Tasks
+    spawner.spawn(unwrap!(crate::wifi::wifi_task(wifi, Irqs)));
+    spawner.spawn(unwrap!(crate::gps::gps_task(gps, Irqs)));
+    spawner.spawn(unwrap!(crate::imu::imu_task(imu, Irqs)));
 
-    spawner.spawn(unwrap!(wifi::wifi_task(r.WifiResources, Irqs)));
-
-    let (mut class, usb_runner) = usb::setup_usb(r.USBResources.usb);
-
-    let gps_runner = gps::gps_task(r.GPSResources, Irqs);
-
+    // 3. Start Application Level Tasks
+    spawner.spawn(unwrap!(stats_task(TASK_NAMES, TASK_CORES, Stats)));
     spawner.spawn(unwrap!(blinky()));
-    spawner.spawn(unwrap!(gps_runner));
-    spawner.spawn(unwrap!(imu::imu_task(r.IMUResources, Irqs)));
 
+    // Join the runners that need to stay alive for this core
     join(usb_runner, core0_repl(&mut class)).await;
 }
 
+pub static METRICS_CORE0: instrumented_executor::ExecutorMetrics =
+    instrumented_executor::ExecutorMetrics::new();
+pub static METRICS_CORE1: instrumented_executor::ExecutorMetrics =
+    instrumented_executor::ExecutorMetrics::new();
+
 static EXECUTOR_HIGH: InstrumentedInterruptExecutor = InstrumentedInterruptExecutor::new();
 static EXECUTOR_LOW: StaticCell<InstrumentedExecutor> = StaticCell::new();
+
+static mut CORE1_STACK: Stack<4096> = Stack::new();
+static EXECUTOR_CORE1: StaticCell<InstrumentedExecutor> = StaticCell::new();
 
 #[interrupt]
 unsafe fn SWI_IRQ_1() {
@@ -222,13 +252,37 @@ unsafe fn SWI_IRQ_1() {
 #[entry]
 fn main() -> ! {
     let p = embassy_rp::init(Default::default());
+    let r = AssignedResources::take(p);
+
     // High-priority executor: SWI_IRQ_1, priority level 2
     interrupt::SWI_IRQ_1.set_priority(Priority::P2);
     let spawner = EXECUTOR_HIGH.start(interrupt::SWI_IRQ_1);
     spawner.spawn(unwrap!(state_machine::state_machine_task()));
 
-    let executor = EXECUTOR_LOW.init(InstrumentedExecutor::new());
-    executor.run(|spawner| {
-        spawner.spawn(unwrap!(init_low_prio_tasks(spawner, p)));
+    // Spawn the SD Card task on Core 1.
+    // The SD Card is blocking and the lowest priority, so it should run on a separate core.
+    spawn_core1(
+        r.CoreResources.core1,
+        unsafe { &mut *core::ptr::addr_of_mut!(CORE1_STACK) },
+        move || {
+            let executor1 = EXECUTOR_CORE1.init(InstrumentedExecutor::new(&METRICS_CORE1));
+            executor1.run(|spawner| {
+                spawner.spawn(unwrap!(crate::sd_card::sd_card_task(
+                    r.SDCardResources,
+                    Irqs
+                )));
+            });
+        },
+    );
+
+    let executor0 = EXECUTOR_LOW.init(InstrumentedExecutor::new(&METRICS_CORE0));
+    executor0.run(|spawner| {
+        spawner.spawn(unwrap!(init_low_prio_tasks(
+            spawner,
+            r.WifiResources,
+            r.USBResources,
+            r.GPSResources,
+            r.IMUResources,
+        )));
     });
 }

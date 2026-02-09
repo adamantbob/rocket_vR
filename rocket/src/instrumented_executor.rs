@@ -12,9 +12,20 @@ use cortex_m::interrupt::InterruptNumber;
 use cortex_m::peripheral::NVIC;
 use critical_section::Mutex;
 
-pub static IDLE_TICKS: AtomicU32 = AtomicU32::new(0);
-pub static POLL_COUNT: AtomicU32 = AtomicU32::new(0);
-pub static WAKE: AtomicBool = AtomicBool::new(true);
+/// Holds metrics for an executor instance.
+pub struct ExecutorMetrics {
+    pub idle_ticks: AtomicU32,
+    pub poll_count: AtomicU32,
+}
+
+impl ExecutorMetrics {
+    pub const fn new() -> Self {
+        Self {
+            idle_ticks: AtomicU32::new(0),
+            poll_count: AtomicU32::new(0),
+        }
+    }
+}
 
 const THREAD_PENDER: usize = usize::MAX;
 
@@ -31,7 +42,6 @@ fn __pender(context: *mut ()) {
                 signal.store(true, portable_atomic::Ordering::Release);
             }
         }
-        WAKE.store(true, Ordering::Release);
         cortex_m::asm::sev();
 
         return;
@@ -63,36 +73,48 @@ fn __pender(context: *mut ()) {
 /// This is a custom executor that:
 /// 1. Uses the "Gated Sleep" pattern to avoid the Observer Effect (spin).
 /// 2. Instruments the loop to count polls and idle usage.
+/// 3. Uses a local "wake" signal to allow multiple executors (one per core).
+/// 4. Tracks metrics independently per executor instance.
 pub struct InstrumentedExecutor {
-    inner: RawExecutor,
+    inner: UnsafeCell<MaybeUninit<RawExecutor>>,
+    wake: AtomicBool,
+    metrics: &'static ExecutorMetrics,
     not_send: PhantomData<*mut ()>,
 }
 
 impl InstrumentedExecutor {
-    pub fn new() -> Self {
-        // Initialize the internal executor with the address of our GLOBAL signal.
-        // This is safe because WAKE is static and lives forever.
-        let ctx = &WAKE as *const AtomicBool as *mut ();
+    pub const fn new(metrics: &'static ExecutorMetrics) -> Self {
         Self {
-            inner: RawExecutor::new(ctx),
+            inner: UnsafeCell::new(MaybeUninit::uninit()),
+            wake: AtomicBool::new(true),
+            metrics,
             not_send: PhantomData,
         }
     }
 
     pub fn run(&'static mut self, init: impl FnOnce(Spawner)) -> ! {
-        init(self.inner.spawner());
+        // Initialize the internal executor with the address of OUR local signal.
+        let ctx = &self.wake as *const AtomicBool as *mut ();
+        unsafe {
+            (&mut *self.inner.get())
+                .as_mut_ptr()
+                .write(RawExecutor::new(ctx));
+        }
+        let inner = unsafe { (&*self.inner.get()).assume_init_ref() };
 
-        log::info!("Starting InstrumentedExecutor (Global Signal Mode)");
+        init(inner.spawner());
+
+        log::info!("Starting InstrumentedExecutor (Local Signal Mode)");
 
         let mut local_polls = 0u32;
         let mut local_idle = 0u32;
 
         loop {
-            // "Wake Gate": Only poll if the GLOBAL signal is set
-            if WAKE.swap(false, Ordering::Acquire) {
+            // "Wake Gate": Only poll if OUR local signal is set
+            if self.wake.swap(false, Ordering::Acquire) {
                 local_polls += 1;
                 unsafe {
-                    self.inner.poll();
+                    inner.poll();
                 };
             }
 
@@ -105,17 +127,21 @@ impl InstrumentedExecutor {
             }
 
             // Check signal again. If work arrived during the latch-clear, don't sleep.
-            if !WAKE.load(Ordering::Relaxed) {
+            if !self.wake.load(Ordering::Relaxed) {
                 unsafe { asm!("wfe") };
             }
 
             let end = Instant::now().as_ticks() as u32;
             local_idle = local_idle.wrapping_add(end.wrapping_sub(start));
 
-            // Commit metrics
-            if local_polls >= 10 || local_idle >= 50_000 {
-                POLL_COUNT.fetch_add(local_polls, Ordering::Relaxed);
-                IDLE_TICKS.fetch_add(local_idle, Ordering::Relaxed);
+            // Commit metrics frequently enough to provide active feedback
+            if local_polls >= 5 || local_idle >= 20_000 {
+                self.metrics
+                    .poll_count
+                    .fetch_add(local_polls, Ordering::Relaxed);
+                self.metrics
+                    .idle_ticks
+                    .fetch_add(local_idle, Ordering::Relaxed);
                 local_polls = 0;
                 local_idle = 0;
             }

@@ -6,6 +6,7 @@ default-run = "rocket_vR"
 
 [features]
 verbose-utilization = []
+debug_imu = []
 rp2040 = ["embassy-rp/rp2040"]
 rp2350 = ["embassy-rp/rp235xa"]
 
