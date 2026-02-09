@@ -1,13 +1,19 @@
-// gps/types.rs
+use crate::log::{LogBuffer, Loggable};
+use crate::types::FlightTicks;
+use core::fmt::Write;
+use proc_macros::TelemetryPayload;
 
 /// Telemetry data captured from the GPS module.
 /// All fields use fixed-point integer arithmetic to ensure high-speed,
 /// deterministic performance without floating-point rounding errors,
 /// while maintaining high-precision floating point estimates for
 /// filtering and telemetry purposes.
-#[derive(Clone, Copy, Debug, Default, serde::Serialize, serde::Deserialize)]
+#[derive(Clone, Copy, Debug, Default, serde::Serialize, serde::Deserialize, TelemetryPayload)]
 #[cfg_attr(feature = "defmt", derive(defmt::Format))]
 pub struct GPSData {
+    /// Tickstamp of when the data was captured.
+    pub tickstamp: FlightTicks,
+
     /// UTC Time as HHMMSS (e.g., 143005 = 14:30:05).
     /// Note: This is "Real World" time from the satellite atomic clocks.
     pub utc_time_secs: u32,
@@ -58,6 +64,7 @@ pub struct GPSData {
 impl GPSData {
     pub const fn new() -> Self {
         Self {
+            tickstamp: 0,
             utc_time_secs: 0,
             lat_microdegrees: 0,
             lon_microdegrees: 0,
@@ -73,10 +80,33 @@ impl GPSData {
     }
 }
 
+impl Loggable for GPSData {
+    const TAG: &'static str = "G";
+    fn format_payload<const SIZE: usize>(&self, cursor: &mut LogBuffer<SIZE>) -> core::fmt::Result {
+        write!(
+            cursor,
+            "{},{},{},{},{},{},{},{},{},{},{}",
+            self.utc_time_secs,
+            self.lat_microdegrees,
+            self.lon_microdegrees,
+            self.raw_alt_mm,
+            self.speed_mm_per_sec,
+            self.satellites,
+            self.fix_valid,
+            self.pdop_x10,
+            self.alt_agl_m,
+            self.velocity_z_mms,
+            self.velocity_z_filt
+        )
+    }
+}
+
 /// Health metrics and status indicators for the GPS module.
-#[derive(Clone, Copy, Debug, Default)]
+#[derive(Clone, Copy, Debug, Default, TelemetryPayload)]
 #[cfg_attr(feature = "defmt", derive(defmt::Format))]
 pub struct GPSHealth {
+    /// Tickstamp of when the health was captured.
+    pub tickstamp: FlightTicks,
     pub last_fix_time_secs: u32,
     pub receive_timeout: u16,
     pub checksum_errors: u16,
@@ -86,11 +116,23 @@ pub struct GPSHealth {
 impl GPSHealth {
     pub const fn new() -> Self {
         Self {
+            tickstamp: 0,
             last_fix_time_secs: 0,
             receive_timeout: 0,
             checksum_errors: 0,
             parse_errors: 0,
         }
+    }
+}
+
+impl Loggable for GPSHealth {
+    const TAG: &'static str = "GH";
+    fn format_payload<const SIZE: usize>(&self, cursor: &mut LogBuffer<SIZE>) -> core::fmt::Result {
+        write!(
+            cursor,
+            "{},{},{},{}",
+            self.last_fix_time_secs, self.receive_timeout, self.checksum_errors, self.parse_errors
+        )
     }
 }
 

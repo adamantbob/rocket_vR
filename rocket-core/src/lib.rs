@@ -4,6 +4,7 @@
 pub mod datacells;
 pub mod gps;
 pub mod imu;
+pub mod log;
 pub mod state_machine;
 pub mod types;
 

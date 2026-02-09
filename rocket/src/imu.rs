@@ -8,6 +8,7 @@ use embassy_sync::blocking_mutex::raw::NoopRawMutex;
 use embassy_sync::mutex::Mutex;
 use embassy_time::{Duration, Instant, Ticker, with_timeout};
 use proc_macros::tracked_task;
+use rocket_core::log::{LOG_CHANNEL, LogEntry};
 use static_cell::StaticCell;
 
 // Sensors
@@ -176,6 +177,7 @@ pub async fn imu_task(r: IMUResources, irqs: Irqs) -> ! {
         }
 
         SENSOR_DATA.imu.update(imu_data);
+        let _ = LOG_CHANNEL.try_send(LogEntry::Imu(imu_data));
         ticker.next().await;
     }
 }

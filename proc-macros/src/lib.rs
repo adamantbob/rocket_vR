@@ -33,3 +33,34 @@ pub fn tracked_task(args: TokenStream, input: TokenStream) -> TokenStream {
     }
     .into()
 }
+
+#[proc_macro_derive(TelemetryPayload)]
+pub fn derive_telemetry_payload(input: TokenStream) -> TokenStream {
+    let input = parse_macro_input!(input as syn::DeriveInput);
+    let name = input.ident;
+
+    let fields = if let syn::Data::Struct(syn::DataStruct {
+        fields: syn::Fields::Named(syn::FieldsNamed { named, .. }),
+        ..
+    }) = input.data
+    {
+        named
+    } else {
+        panic!("TelemetryPayload can only be derived for structs with named fields");
+    };
+
+    // Build the Header string, skipping 'tickstamp' if it exists in the struct
+    let header_string = fields
+        .iter()
+        .map(|f| f.ident.as_ref().unwrap().to_string())
+        .filter(|n| n != "tickstamp")
+        .collect::<Vec<_>>()
+        .join(",");
+
+    let expanded = quote! {
+        impl #name {
+            pub const CSV_HEADER: &'static str = #header_string;
+        }
+    };
+    TokenStream::from(expanded)
+}

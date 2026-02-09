@@ -82,7 +82,9 @@ embedded-storage = { version = "0.3" }
 static_cell = "2.1"
 portable-atomic = { version = "1.5", features = ["critical-section"] }
 log = "0.4"
-embedded-sdmmc = "0.7.0"
+# Note: v0.9.0 removes Send/Sync from core types, which breaks compatibility 
+# with some Embassy executors. Stick to v0.8.0 for now.
+embedded-sdmmc = { version = "0.8.0", default-features = false }
 
 proc-macros = { path = "../proc-macros" }
 rocket-core = { path = "../rocket-core", features = ["defmt"] }
