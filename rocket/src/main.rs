@@ -14,6 +14,7 @@ compile_error!("Mismatched target for RP2350! Please use 'cargo run-pico2'");
 
 use cortex_m_rt::entry;
 use defmt::unwrap;
+use defmt_rtt as _;
 use embassy_executor::Spawner;
 use embassy_futures::join::join;
 use embassy_rp::interrupt::{InterruptExt, Priority};
@@ -26,7 +27,8 @@ use embassy_usb::class::cdc_acm::CdcAcmClass;
 use heapless::Vec;
 use proc_macros::tracked_task;
 use static_cell::StaticCell;
-use {defmt_rtt as _, panic_probe as _};
+
+mod panic;
 
 mod instrumented_executor;
 use instrumented_executor::{InstrumentedExecutor, InstrumentedInterruptExecutor};
@@ -41,6 +43,9 @@ mod state_machine;
 mod usb;
 mod utilization;
 mod wifi;
+
+pub use heapless;
+pub use rocket_core;
 
 use crate::utilization::{TrackedExt, stats_task};
 use crate::wifi::LedState;
@@ -129,6 +134,8 @@ bind_interrupts!(pub struct Irqs {
                  embassy_rp::dma::InterruptHandler<DMA_CH4>;
 });
 
+use panic::{PANIC_RECORDS, check_core_panic};
+
 #[tracked_task(Blinky)]
 #[embassy_executor::task]
 async fn blinky() -> ! {
@@ -139,6 +146,27 @@ async fn blinky() -> ! {
         Timer::after(short_delay).await;
         LedState::Off.send().await;
         Timer::after(long_delay).await;
+    }
+}
+
+/// Dedicated task to monitor the "other" core for crashes.
+#[embassy_executor::task(pool_size = 2)]
+pub(crate) async fn panic_monitor_task(target_core: usize) -> ! {
+    loop {
+        if let Some(report) = check_core_panic(target_core) {
+            if report.message == "(Incomplete formatting)" {
+                error!("CORE {} PANIC DETECTED (Partial Sentinel)", target_core);
+            } else {
+                error!(
+                    "CORE {} PANIC DETECTED: {} at {}:{}",
+                    target_core,
+                    report.message.as_str(),
+                    report.file.as_str(),
+                    report.line
+                );
+            }
+        }
+        Timer::after_millis(500).await;
     }
 }
 
@@ -217,6 +245,19 @@ pub async fn init_low_prio_tasks(
     gps: GPSResources,
     imu: IMUResources,
 ) {
+    // Check for previous panics on BOTH cores
+    for core in 0..2 {
+        if let Some(report) = check_core_panic(core) {
+            error!(
+                "PREVIOUS PANIC DETECTED on Core {}: {} at {}:{}",
+                core,
+                report.message.as_str(),
+                report.file.as_str(),
+                report.line
+            );
+        }
+    }
+
     // 1. Initialize USB: It returns a class and a future to run.
     let (mut class, usb_runner) = usb::setup_usb(usb.usb);
 
@@ -228,6 +269,9 @@ pub async fn init_low_prio_tasks(
     // 3. Start Application Level Tasks
     spawner.spawn(unwrap!(stats_task(TASK_NAMES, TASK_CORES, Stats)));
     spawner.spawn(unwrap!(blinky()));
+
+    // Target core 1 (the executor core)
+    spawner.spawn(unwrap!(panic_monitor_task(1)));
 
     // Join the runners that need to stay alive for this core
     join(usb_runner, core0_repl(&mut class)).await;
@@ -241,7 +285,7 @@ pub static METRICS_CORE1: instrumented_executor::ExecutorMetrics =
 static EXECUTOR_HIGH: InstrumentedInterruptExecutor = InstrumentedInterruptExecutor::new();
 static EXECUTOR_LOW: StaticCell<InstrumentedExecutor> = StaticCell::new();
 
-static mut CORE1_STACK: Stack<4096> = Stack::new();
+static mut CORE1_STACK: Stack<16384> = Stack::new();
 static EXECUTOR_CORE1: StaticCell<InstrumentedExecutor> = StaticCell::new();
 
 #[interrupt]
@@ -271,6 +315,7 @@ fn main() -> ! {
                     r.SDCardResources,
                     Irqs
                 )));
+                spawner.spawn(unwrap!(panic_monitor_task(0)));
             });
         },
     );

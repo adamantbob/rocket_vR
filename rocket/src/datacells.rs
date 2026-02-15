@@ -3,8 +3,6 @@
 // Each cell represent one chunk of data that can be read together.
 use core::cell::Cell;
 use defmt::info;
-use embassy_sync::blocking_mutex::Mutex;
-use embassy_sync::blocking_mutex::raw::CriticalSectionRawMutex;
 
 pub use rocket_core::datacells::DataCell;
 
@@ -17,7 +15,7 @@ pub enum ErrorLevel {
     FATAL,
 }
 
-const BOOT_KEY_VALID: u32 = 0xDEADBEEF;
+const BOOT_SIGNATURE_VALID: u32 = 0xDEADBEEF;
 
 #[unsafe(link_section = ".uninit")]
 static mut PERSISTENT_STORAGE: PersistentData = PersistentData {
@@ -26,15 +24,15 @@ static mut PERSISTENT_STORAGE: PersistentData = PersistentData {
 };
 
 #[unsafe(link_section = ".uninit")]
-static mut MAGIC_BOOT_KEY: u32 = 0;
+static mut BOOT_SIGNATURE: u32 = 0;
 
 /// Attempts to recover flight data from RAM.
-/// Returns Some(PersistentData) if the magic key is valid.
+/// Returns Some(PersistentData) if the validation signature is valid.
 pub fn try_recover_flight_data() -> Option<PersistentData> {
     info!("Attempting to recover flight data...");
     info!("Address: 0x{:x}", &raw mut PERSISTENT_STORAGE as usize);
     unsafe {
-        if MAGIC_BOOT_KEY == BOOT_KEY_VALID {
+        if BOOT_SIGNATURE == BOOT_SIGNATURE_VALID {
             Some(PERSISTENT_STORAGE)
         } else {
             None
@@ -42,17 +40,17 @@ pub fn try_recover_flight_data() -> Option<PersistentData> {
     }
 }
 
-/// Saves the current flight data to persistent RAM and sets the magic key.
+/// Saves the current flight data to persistent RAM and sets the validation signature.
 pub fn save_flight_data(data: PersistentData) {
     unsafe {
         PERSISTENT_STORAGE = data;
-        MAGIC_BOOT_KEY = BOOT_KEY_VALID;
+        BOOT_SIGNATURE = BOOT_SIGNATURE_VALID;
     }
 }
 
 /// Invalidates the persistent storage. Use this for fresh launches.
 pub fn clear_persistence() {
     unsafe {
-        MAGIC_BOOT_KEY = 0;
+        BOOT_SIGNATURE = 0;
     }
 }

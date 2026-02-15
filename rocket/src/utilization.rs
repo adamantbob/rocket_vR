@@ -1,13 +1,13 @@
 #[cfg(feature = "verbose-utilization")]
-use crate::info;
+use crate::debug;
 #[cfg(not(feature = "verbose-utilization"))]
 use crate::warn;
 use core::future::Future;
 use core::pin::Pin;
 use core::task::{Context, Poll};
+use defmt_rtt as _;
 use embassy_time::{Duration, Instant};
 use portable_atomic::{AtomicU32, Ordering};
-use {defmt_rtt as _, panic_probe as _};
 
 use crate::instrumented_executor;
 
@@ -176,18 +176,18 @@ pub async fn stats_task(
 
             #[cfg(feature = "verbose-utilization")]
             {
-                info!("--- CPU Utilization (1s avg) ---");
-                info!(
+                debug!("--- CPU Utilization (1s avg) ---");
+                debug!(
                     "Core 0 Total:   {} ({} poll/s)",
                     Percent(usage0_total),
                     poll0 + interrupt_polls
                 );
-                info!(
+                debug!(
                     "  High Prio:    {} ({}/s)",
                     Percent(usage0_high_prio),
                     interrupt_polls
                 );
-                info!(
+                debug!(
                     "  Background:   {} ({}/s)",
                     Percent(usage0_background.max(0.0)),
                     poll0
@@ -195,7 +195,7 @@ pub async fn stats_task(
 
                 for i in 0..task_count {
                     if _task_cores[i] == 0 {
-                        info!(
+                        debug!(
                             "    {}: {} ({}/s)",
                             names[i],
                             Percent(task_usages[i]),
@@ -204,14 +204,14 @@ pub async fn stats_task(
                     }
                 }
 
-                info!(
+                debug!(
                     "Core 1 Total:   {} ({} poll/s)",
                     Percent(usage1_total),
                     poll1
                 );
                 for i in 0..task_count {
                     if _task_cores[i] == 1 {
-                        info!(
+                        debug!(
                             "    {}: {} ({}/s)",
                             names[i],
                             Percent(task_usages[i]),
