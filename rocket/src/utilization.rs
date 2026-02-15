@@ -1,13 +1,13 @@
 #[cfg(feature = "verbose-utilization")]
-use crate::info;
+use crate::debug;
 #[cfg(not(feature = "verbose-utilization"))]
 use crate::warn;
 use core::future::Future;
 use core::pin::Pin;
 use core::task::{Context, Poll};
+use defmt_rtt as _;
 use embassy_time::{Duration, Instant};
-use portable_atomic::Ordering;
-use {defmt_rtt as _, panic_probe as _};
+use portable_atomic::{AtomicU32, Ordering};
 
 use crate::instrumented_executor;
 
@@ -46,36 +46,27 @@ pub const TOTAL_USAGE_ALARM_THRESHOLD: f32 = 80.0;
 #[cfg(not(feature = "verbose-utilization"))]
 pub const HIGH_PRIORITY_TASK_USAGE_THRESHOLD: f32 = 20.0;
 
-// Silent Profiling: We use raw u32s for task ticks to avoid atomic-induced event spins.
-// Since these are only updated by the executor thread, it's safe from races.
-static mut TASK_TICKS: [u32; MAX_TASKS] = [0; MAX_TASKS];
-static mut TASK_POLLS: [u32; MAX_TASKS] = [0; MAX_TASKS];
+// Multicore safe profiling using atomics.
+static TASK_TICKS: [AtomicU32; MAX_TASKS] = [const { AtomicU32::new(0) }; MAX_TASKS];
+static TASK_POLLS: [AtomicU32; MAX_TASKS] = [const { AtomicU32::new(0) }; MAX_TASKS];
 
 fn get_task_ticks(id: usize) -> u32 {
-    unsafe { core::ptr::read_volatile(&TASK_TICKS[id]) }
+    TASK_TICKS[id].load(Ordering::Relaxed)
 }
 
 fn add_task_ticks(id: usize, delta: u32) {
-    if id >= MAX_TASKS {
-        return;
-    }
-    unsafe {
-        let ptr = &mut TASK_TICKS[id] as *mut u32;
-        core::ptr::write_volatile(ptr, core::ptr::read_volatile(ptr).wrapping_add(delta));
+    if id < MAX_TASKS {
+        TASK_TICKS[id].fetch_add(delta, Ordering::Relaxed);
     }
 }
 
 fn get_task_polls(id: usize) -> u32 {
-    unsafe { core::ptr::read_volatile(&TASK_POLLS[id]) }
+    TASK_POLLS[id].load(Ordering::Relaxed)
 }
 
 fn add_task_polls(id: usize, delta: u32) {
-    if id >= MAX_TASKS {
-        return;
-    }
-    unsafe {
-        let ptr = &mut TASK_POLLS[id] as *mut u32;
-        core::ptr::write_volatile(ptr, core::ptr::read_volatile(ptr).wrapping_add(delta));
+    if id < MAX_TASKS {
+        TASK_POLLS[id].fetch_add(delta, Ordering::Relaxed);
     }
 }
 
@@ -105,9 +96,14 @@ pub trait TrackedExt: Future + Sized {
 impl<F: Future> TrackedExt for F {}
 
 #[embassy_executor::task]
-pub async fn stats_task(names: &'static [&'static str], stats_id: TaskId) {
+pub async fn stats_task(
+    names: &'static [&'static str],
+    _task_cores: &'static [u8],
+    stats_id: TaskId,
+) {
     async move {
-        let mut last_idle = 0u32;
+        let mut last_idle_c0 = 0u32;
+        let mut last_idle_c1 = 0u32;
         let mut last_task_ticks = [0u32; MAX_TASKS];
         let mut last_task_polls = [0u32; MAX_TASKS];
         let mut last_time = embassy_time::Instant::now();
@@ -117,37 +113,52 @@ pub async fn stats_task(names: &'static [&'static str], stats_id: TaskId) {
         loop {
             embassy_time::Timer::after(Duration::from_secs(1)).await;
             let now = embassy_time::Instant::now();
-            let idle = instrumented_executor::IDLE_TICKS.load(Ordering::Relaxed);
+
+            let metrics0 = &crate::METRICS_CORE0;
+            let metrics1 = &crate::METRICS_CORE1;
+
+            let idle0 = metrics0.idle_ticks.load(Ordering::Relaxed);
+            let idle1 = metrics1.idle_ticks.load(Ordering::Relaxed);
+
+            #[allow(unused_variables)]
+            let poll0 = metrics0.poll_count.swap(0, Ordering::Relaxed);
+            #[allow(unused_variables)]
+            let poll1 = metrics1.poll_count.swap(0, Ordering::Relaxed);
+
             let interrupt_active =
                 instrumented_executor::INTERRUPT_ACTIVE_TICKS.load(Ordering::Relaxed);
+            #[allow(unused_variables)]
+            let interrupt_polls =
+                instrumented_executor::INTERRUPT_POLL_COUNT.swap(0, Ordering::Relaxed);
 
             // Time Calculations
-            let delta_idle = idle.wrapping_sub(last_idle);
+            let delta_idle0 = idle0.wrapping_sub(last_idle_c0);
+            let delta_idle1 = idle1.wrapping_sub(last_idle_c1);
             let delta_interrupt_active = interrupt_active.wrapping_sub(last_interrupt_active);
             let delta_time = (now - last_time).as_ticks() as u32;
 
-            // info!("Idle: {}", delta_idle);
-            // info!("Interrupt Active: {}", delta_interrupt_active);
-            // info!("Time: {}", delta_time);
+            if delta_time == 0 {
+                continue;
+            }
 
-            // CPU Usage Calculations
-            let delta_actual_idle = delta_idle.saturating_sub(delta_interrupt_active);
-            let usage = 100.0 * (1.0 - (delta_actual_idle as f32 / delta_time as f32));
-            let interrupt_usage = 100.0 * (delta_interrupt_active as f32 / delta_time as f32);
-            let thread_usage = 100.0 * (delta_time.saturating_sub(delta_idle) as f32 / delta_time as f32);
+            // --- CPU Usage Calculations ---
 
-            // Polls Calculations
-            let thread_polls = instrumented_executor::POLL_COUNT.swap(0, Ordering::Relaxed);
-            let interrupt_polls =
-                instrumented_executor::INTERRUPT_POLL_COUNT.swap(0, Ordering::Relaxed);
-            let total_polls = thread_polls + interrupt_polls;
+            // Core 0: Has both thread and interrupt activity.
+            // Note: delta_idle0 includes time spent in interrupts that fire during WFE.
+            // True Idle = (Total Idle Ticks reported by executor) - (Interrupt Active Ticks).
+            let actual_idle0 = delta_idle0.saturating_sub(delta_interrupt_active);
+            #[allow(unused_variables)]
+            let usage0_total = 100.0 * (1.0 - (actual_idle0 as f32 / delta_time as f32));
+            #[allow(unused_variables)]
+            let usage0_high_prio = 100.0 * (delta_interrupt_active as f32 / delta_time as f32);
+            #[allow(unused_variables)]
+            let usage0_background = usage0_total - usage0_high_prio;
+
+            // Core 1: Currently only thread activity tracked.
+            #[allow(unused_variables)]
+            let usage1_total = 100.0 * (1.0 - (delta_idle1 as f32 / delta_time as f32));
 
             let mut task_usages = [0.0f32; MAX_TASKS];
-            // Conditional state for threshold detection. Only compiled in when
-            // constant tracking (verbose-utilization) is disabled.
-            #[cfg(not(feature = "verbose-utilization"))]
-            let mut any_task_exceeded = false;
-
             let mut task_poll_deltas = [0u32; MAX_TASKS];
 
             for i in 0..task_count {
@@ -155,90 +166,78 @@ pub async fn stats_task(names: &'static [&'static str], stats_id: TaskId) {
                 let polls = get_task_polls(i);
                 let delta = ticks.wrapping_sub(last_task_ticks[i]);
                 let poll_delta = polls.wrapping_sub(last_task_polls[i]);
-                let task_usage = 100.0 * (delta as f32 / delta_time as f32);
-                task_usages[i] = task_usage;
+
+                task_usages[i] = 100.0 * (delta as f32 / delta_time as f32);
                 task_poll_deltas[i] = poll_delta;
-                #[cfg(not(feature = "verbose-utilization"))]
-                if task_usage > TASK_USAGE_THRESHOLD {
-                    any_task_exceeded = true;
-                }
+
                 last_task_ticks[i] = ticks;
                 last_task_polls[i] = polls;
             }
 
-            // Diagnostic Switch: We use a "selection block" with direct #[cfg] attributes.
-            // This ensures that either constant reporting or threshold logic is compiled in.
             #[cfg(feature = "verbose-utilization")]
             {
-                info!(
-                    "--- CPU Utilization: {} ({}/s) ---",
-                    Percent(usage),
-                    total_polls
+                debug!("--- CPU Utilization (1s avg) ---");
+                debug!(
+                    "Core 0 Total:   {} ({} poll/s)",
+                    Percent(usage0_total),
+                    poll0 + interrupt_polls
                 );
-                info!(
-                    "High Priority Task Utilization: {} ({}/s)",
-                    Percent(interrupt_usage),
+                debug!(
+                    "  High Prio:    {} ({}/s)",
+                    Percent(usage0_high_prio),
                     interrupt_polls
                 );
-                info!(
-                    "Background Task Utilization: {} ({}/s)",
-                    Percent(thread_usage),
-                    thread_polls
+                debug!(
+                    "  Background:   {} ({}/s)",
+                    Percent(usage0_background.max(0.0)),
+                    poll0
+                );
+
+                for i in 0..task_count {
+                    if _task_cores[i] == 0 {
+                        debug!(
+                            "    {}: {} ({}/s)",
+                            names[i],
+                            Percent(task_usages[i]),
+                            task_poll_deltas[i]
+                        );
+                    }
+                }
+
+                debug!(
+                    "Core 1 Total:   {} ({} poll/s)",
+                    Percent(usage1_total),
+                    poll1
                 );
                 for i in 0..task_count {
-                    info!(
-                        "  {}: {} ({}/s)",
-                        names[i],
-                        Percent(task_usages[i]),
-                        task_poll_deltas[i]
-                    );
-                }
-            }
-            #[cfg(not(feature = "verbose-utilization"))]
-            {
-                if usage > TOTAL_USAGE_WARNING_THRESHOLD
-                    || any_task_exceeded
-                    || interrupt_usage > HIGH_PRIORITY_TASK_USAGE_THRESHOLD
-                {
-                    let level = if usage > TOTAL_USAGE_ALARM_THRESHOLD {
-                        "ALARM"
-                    } else {
-                        "WARNING"
-                    };
-
-                    warn!(
-                        "--- CPU Utilization {}: {} ({}/s) ---",
-                        level,
-                        Percent(usage),
-                        total_polls
-                    );
-                    warn!(
-                        "High Priority Task Utilization: {} ({}/s)",
-                        Percent(interrupt_usage),
-                        interrupt_polls
-                    );
-                    warn!(
-                        "Background Task Utilization: {} ({}/s)",
-                        Percent(thread_usage),
-                        thread_polls
-                    );
-
-                    for i in 0..task_count {
-                        if task_usages[i] > TASK_USAGE_THRESHOLD
-                            || usage > TOTAL_USAGE_WARNING_THRESHOLD
-                        {
-                            warn!(
-                                "  {}: {} ({}/s)",
-                                names[i],
-                                Percent(task_usages[i]),
-                                task_poll_deltas[i]
-                            );
-                        }
+                    if _task_cores[i] == 1 {
+                        debug!(
+                            "    {}: {} ({}/s)",
+                            names[i],
+                            Percent(task_usages[i]),
+                            task_poll_deltas[i]
+                        );
                     }
                 }
             }
 
-            last_idle = idle;
+            #[cfg(not(feature = "verbose-utilization"))]
+            {
+                // Summary/Warning logic can be added here if needed,
+                // but let's stick to the verbose report the user is watching.
+                if usage0_total > TOTAL_USAGE_ALARM_THRESHOLD
+                    || usage1_total > TOTAL_USAGE_ALARM_THRESHOLD
+                {
+                    warn!(
+                        "HIGH CPU LOAD: Core 0: {}, Core 1: {}",
+                        Percent(usage0_total),
+                        Percent(usage1_total)
+                    );
+                }
+            }
+
+            last_idle_c0 = idle0;
+            last_idle_c1 = idle1;
             last_interrupt_active = interrupt_active;
             last_time = now;
         }
@@ -257,7 +256,7 @@ pub async fn stats_task(names: &'static [&'static str], stats_id: TaskId) {
 /// ```
 #[macro_export]
 macro_rules! define_utilization_tasks {
-    ($($name:ident),*) => {
+    ($($name:ident [$core:expr]),*) => {
         #[allow(non_camel_case_types)]
         pub enum TaskIdEnum {
             $($name),*
@@ -265,6 +264,9 @@ macro_rules! define_utilization_tasks {
 
         /// Human-readable names of the registered tasks.
         pub const TASK_NAMES: &[&'static str] = &[ $( stringify!($name) ),* ];
+
+        /// Core assignments for the registered tasks.
+        pub const TASK_CORES: &[u8] = &[ $( $core ),* ];
 
         // Compile-time assertion that we haven't exceeded MAX_TASKS.
         const _: () = assert!(TASK_NAMES.len() <= $crate::utilization::MAX_TASKS, "Too many tasks registered for utilization tracking!");

@@ -1,4 +1,15 @@
 // types.rs
+/// FlightTicks is the number of ticks on a monotonic microsecond clock
+/// which start at boot time. It is monotonic and will wrap around at 2^64 microseconds
+/// which is approximately 5.8 million years.
+/// The FlightTick rate is defined by embassy_time::TICK_HZ
+/// which is embedded into the log schema.
+pub type FlightTicks = u64;
+
+pub trait TimedData {
+    fn tickstamp(&self) -> FlightTicks;
+}
+
 #[repr(u8)]
 #[derive(Debug, Clone, Copy, PartialEq, Default, serde::Serialize, serde::Deserialize)]
 #[cfg_attr(feature = "defmt", derive(defmt::Format))]

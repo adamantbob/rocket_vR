@@ -128,13 +128,23 @@ To enable constant, second-by-second reporting for debugging, build with the `ve
 cargo run --features verbose-utilization
 ```
 
+## Robust Panic Handling
+
+The system features a **Bidirectional Cross-Core Panic Monitoring** system designed for high reliability:
+
+- **Dual Records**: Each core has an independent `PanicRecord` in `.uninit` RAM. This ensures that if both cores crash simultaneously, their unique state is preserved and not overwritten.
+- **Hardware Signalling**: Uses the RP2350 SIO FIFO as a hardware-level sentinel. This provides an immediate "crash detected" signal that bypasses system caches and memory.
+- **Post-Mortem Reporting**: Panic information (message, file, line) is stored in persistent RAM. After a reset, the system checks both records and reports any previous crashes to the console.
+- **Cross-Core Heartbeat**: A dedicated `panic_monitor_task` on each core watches the "other" core. Core 0 monitors Core 1, and Core 1 monitors Core 0.
+
 ## To-Do (Unprioritized)
 
 - Have 'cargo build' generate the uf2 file for manually loading onto the Pi
-- Enable the multi-core
+- [x] Enable the multi-core
 - Move the USB Logger over to Core 1
 - [x] measure CPU consumption
+- [x] Implement robust bidirectional panic monitoring
 - Implement executor which allows specific ordering of tasks. i.e., always run the state machine task first in each poll loop, then the pyros, etc.
 - Design abstract base tasks for Input and Output Tasks. (Don't need one for State Machine since there only be the one)
 - Design the async CHANNELS in order to communicate between the tasks.
-- Design the flash log storage. 
+- Design the flash log storage.

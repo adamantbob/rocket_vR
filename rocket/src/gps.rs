@@ -1,17 +1,18 @@
 use crate::state_machine::SENSOR_DATA;
-use crate::{GPS, GPSResources, Irqs, info};
+use crate::{GPS, GPSResources, Irqs, local_info};
+use defmt_rtt as _;
 use embassy_futures::select::{Either, select};
 use embassy_rp::uart::{BufferedUart, Config};
 use embassy_time::{Duration, Instant, Ticker, Timer, with_timeout};
 use embedded_io_async::{Read, Write};
 use proc_macros::tracked_task;
 use static_cell::StaticCell;
-use {defmt_rtt as _, panic_probe as _};
 
 use rocket_core::gps::{
     GPSData, GPSHealth, VerticalKalman,
     parser::{process_line, validate_checksum},
 };
+use rocket_core::log::{LOG_CHANNEL, LogEntry};
 
 /// GPS Module Task
 ///
@@ -107,10 +108,12 @@ pub async fn gps_task(r: GPSResources, irqs: Irqs) -> ! {
                     Err(_) => {
                         gps_health.receive_timeout = gps_health.receive_timeout.saturating_add(100);
                         current_pos.fix_valid = false;
-                        info!("GPS Alert: Link Timeout!");
+                        // local_info!("GPS Alert: Link Timeout!");
+                        // let _ = LOG_CHANNEL.try_send(LogEntry::Event("GPS Alert: Link Timeout!"));
 
                         // Immediate broadcast of failure status
                         SENSOR_DATA.gps.update(current_pos);
+                        let _ = LOG_CHANNEL.try_send(LogEntry::Gps(current_pos));
                         SENSOR_DATA.gps_health.update(gps_health);
                     }
                 }
@@ -119,6 +122,7 @@ pub async fn gps_task(r: GPSResources, irqs: Irqs) -> ! {
             Either::Second(_) => {
                 // Periodically sync health metrics to the blackboard
                 SENSOR_DATA.gps_health.update(gps_health);
+                let _ = LOG_CHANNEL.try_send(LogEntry::GPSHealth(gps_health));
             }
         }
     }

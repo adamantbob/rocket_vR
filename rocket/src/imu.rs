@@ -1,3 +1,4 @@
+#[cfg(feature = "debug_imu")]
 use crate::log_triad_fixed_width;
 use crate::state_machine::SENSOR_DATA;
 use crate::{IMU, IMUResources, Irqs, info};
@@ -8,6 +9,7 @@ use embassy_sync::blocking_mutex::raw::NoopRawMutex;
 use embassy_sync::mutex::Mutex;
 use embassy_time::{Duration, Instant, Ticker, with_timeout};
 use proc_macros::tracked_task;
+use rocket_core::log::{LOG_CHANNEL, LogEntry};
 use static_cell::StaticCell;
 
 // Sensors
@@ -148,12 +150,21 @@ pub async fn imu_task(r: IMUResources, irqs: Irqs) -> ! {
         let utilization: u8 = ((bus_time.as_micros() * 100) / 10_000) as u8;
 
         // Every 1 second (100 ticks @ 100Hz), print the "Heartbeat"
+
         if test_counter >= 100 {
-            info!(
-                "IMU Error Level: ADXL: {} | LSM: {} | MAG: {}",
-                adxl_error_level, lsm_error_level, mag_error_level
-            );
-            info!("Bus Utilization: {}%", utilization);
+            #[cfg(feature = "debug_imu")]
+            {
+                info!(
+                    "IMU Error Level: ADXL: {} | LSM: {} | MAG: {}",
+                    adxl_error_level, lsm_error_level, mag_error_level
+                );
+                info!("Bus Utilization: {}%", utilization);
+                // Print the last valid readings
+                log_triad_fixed_width!("HI-G ", imu_data.accel_high_g);
+                log_triad_fixed_width!("LOW-G", imu_data.accel_low_g);
+                log_triad_fixed_width!("GYRO ", imu_data.gyro);
+                log_triad_fixed_width!("MAG  ", imu_data.mag);
+            }
             let total_error_level: u32 =
                 adxl_error_level as u32 + lsm_error_level as u32 + mag_error_level as u32;
             let imu_error_level = IMUHealth::new_from_readings(
@@ -165,17 +176,11 @@ pub async fn imu_task(r: IMUResources, irqs: Irqs) -> ! {
             );
             SENSOR_DATA.imu_health.update(imu_error_level);
 
-            // Print the last valid readings
-            log_triad_fixed_width!("HI-G ", imu_data.accel_high_g);
-            log_triad_fixed_width!("LOW-G", imu_data.accel_low_g);
-            log_triad_fixed_width!("GYRO ", imu_data.gyro);
-            log_triad_fixed_width!("MAG  ", imu_data.mag);
-
             // Reset metrics for the next second
             test_counter = 0;
         }
-
         SENSOR_DATA.imu.update(imu_data);
+        let _ = LOG_CHANNEL.try_send(LogEntry::Imu(imu_data));
         ticker.next().await;
     }
 }

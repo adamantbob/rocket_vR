@@ -81,7 +81,7 @@ pub fn setup_usb(
 
     // Creates the logger and returns the logger future
     // Note: You'll need to use log::info! afterwards instead of info! for this to work (this also applies to all the other log::* macros)
-    let log_fut = embassy_usb_logger::with_class!(1024, log::LevelFilter::Info, logger_class);
+    let log_fut = embassy_usb_logger::with_class!(1024, log::LevelFilter::Debug, logger_class);
 
     // Build the builder.
     static DEVICE: StaticCell<embassy_usb::UsbDevice<'static, Driver<'static, USB>>> =

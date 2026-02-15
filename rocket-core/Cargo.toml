@@ -11,6 +11,10 @@ fixed-macro = "1.2"
 serde = { version = "1.0.203", default-features = false, features = ["derive"] }
 heapless = { version = "0.8", features = ["defmt-03"] }
 embassy-sync = { git = "https://github.com/embassy-rs/embassy" }
+embassy-time = { git = "https://github.com/embassy-rs/embassy" }
+portable-atomic = { version = "1.5", features = ["critical-section"] }
+
+proc-macros = { path = "../proc-macros" }
 
 [features]
 default = []

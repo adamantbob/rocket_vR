@@ -45,6 +45,15 @@ macro_rules! info {
     ($($arg:tt)*) => {
         ::defmt::info!($($arg)*);
         ::log::info!($($arg)*);
+        $crate::log_to_sd!($crate::rocket_core::log::LogLevel::Info, $($arg)*);
+    };
+}
+
+#[macro_export]
+macro_rules! local_info {
+    ($($arg:tt)*) => {
+        ::defmt::info!($($arg)*);
+        ::log::info!($($arg)*);
     };
 }
 
@@ -53,11 +62,29 @@ macro_rules! warn {
     ($($arg:tt)*) => {
         ::defmt::warn!($($arg)*);
         ::log::warn!($($arg)*);
+        $crate::log_to_sd!($crate::rocket_core::log::LogLevel::Warn, $($arg)*);
+    };
+}
+
+#[macro_export]
+macro_rules! local_warn {
+    ($($arg:tt)*) => {
+        ::defmt::warn!($($arg)*);
+        ::log::warn!($($arg)*);
     };
 }
 
 #[macro_export]
 macro_rules! error {
+    ($($arg:tt)*) => {
+        ::defmt::error!($($arg)*);
+        ::log::error!($($arg)*);
+        $crate::log_to_sd!($crate::rocket_core::log::LogLevel::Error, $($arg)*);
+    };
+}
+
+#[macro_export]
+macro_rules! local_error {
     ($($arg:tt)*) => {
         ::defmt::error!($($arg)*);
         ::log::error!($($arg)*);
@@ -77,6 +104,24 @@ macro_rules! trace {
     ($($arg:tt)*) => {
         ::defmt::trace!($($arg)*);
         ::log::trace!($($arg)*);
+    };
+}
+
+#[macro_export]
+macro_rules! log_to_sd {
+    ($level:expr, $($arg:tt)*) => {
+        {
+            use core::fmt::Write;
+            use core::sync::atomic::Ordering;
+            let mut s = ::heapless::String::<32>::new();
+            if let Ok(_) = write!(s, $($arg)*) {
+                if let Err(_) = $crate::rocket_core::log::LOG_CHANNEL.try_send(
+                    $crate::rocket_core::log::LogEntry::Log($level, s)
+                ) {
+                    $crate::rocket_core::log::DROPPED_LOGS.fetch_add(1, Ordering::Relaxed);
+                }
+            }
+        }
     };
 }
 

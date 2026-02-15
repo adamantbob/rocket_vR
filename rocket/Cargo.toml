@@ -6,6 +6,7 @@ default-run = "rocket_vR"
 
 [features]
 verbose-utilization = []
+debug_imu = []
 rp2040 = ["embassy-rp/rp2040"]
 rp2350 = ["embassy-rp/rp235xa"]
 
@@ -82,7 +83,9 @@ embedded-storage = { version = "0.3" }
 static_cell = "2.1"
 portable-atomic = { version = "1.5", features = ["critical-section"] }
 log = "0.4"
-embedded-sdmmc = "0.7.0"
+# Note: v0.9.0 removes Send/Sync from core types, which breaks compatibility 
+# with some Embassy executors. Stick to v0.8.0 for now.
+embedded-sdmmc = { version = "0.8.0", default-features = false }
 
 proc-macros = { path = "../proc-macros" }
 rocket-core = { path = "../rocket-core", features = ["defmt"] }
@@ -104,6 +107,6 @@ path = "src/main.rs"
 [target.'cfg(target_arch = "arm")'.dependencies]
 cortex-m = { version = "0.7.6", features = ["inline-asm"] }
 cortex-m-rt = "0.7.0"
-panic-probe = { version = "1.0.0", features = ["print-defmt"] }
+panic-probe = { version = "1.0.0", features = ["print-defmt"], optional = true }
 defmt-rtt = "1.0.0"
-critical-section = "1.1"
+critical-section = "1.2"
