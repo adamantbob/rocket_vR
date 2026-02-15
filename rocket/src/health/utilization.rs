@@ -269,12 +269,12 @@ macro_rules! define_utilization_tasks {
         pub const TASK_CORES: &[u8] = &[ $( $core ),* ];
 
         // Compile-time assertion that we haven't exceeded MAX_TASKS.
-        const _: () = assert!(TASK_NAMES.len() <= $crate::utilization::MAX_TASKS, "Too many tasks registered for utilization tracking!");
+        const _: () = assert!(TASK_NAMES.len() <= $crate::health::utilization::MAX_TASKS, "Too many tasks registered for utilization tracking!");
 
         $(
             #[allow(non_upper_case_globals)]
             /// Unique identifier for the task's utilization tracking.
-            pub const $name: $crate::utilization::TaskId = $crate::utilization::TaskId(TaskIdEnum::$name as usize);
+            pub const $name: $crate::health::utilization::TaskId = $crate::health::utilization::TaskId(TaskIdEnum::$name as usize);
         )*
     }
 }

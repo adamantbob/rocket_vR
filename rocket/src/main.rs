@@ -38,18 +38,18 @@ use instrumented_executor::{
 mod channels;
 mod datacells;
 mod gps;
+mod health;
 mod imu;
 mod macros;
 mod sd_card;
 mod state_machine;
 mod usb;
-mod utilization;
 mod wifi;
 
-pub use heapless;
 pub use rocket_core;
 
-use crate::utilization::{TrackedExt, stats_task};
+use crate::health::panic_monitor_task;
+use crate::health::utilization::{TrackedExt, stats_task};
 use crate::wifi::LedState;
 
 define_utilization_tasks!(
@@ -136,7 +136,7 @@ bind_interrupts!(pub struct Irqs {
                  embassy_rp::dma::InterruptHandler<DMA_CH4>;
 });
 
-use panic::{PANIC_RECORDS, check_core_panic};
+use panic::check_core_panic;
 
 #[tracked_task(Blinky)]
 #[embassy_executor::task]
@@ -148,27 +148,6 @@ async fn blinky() -> ! {
         Timer::after(short_delay).await;
         LedState::Off.send().await;
         Timer::after(long_delay).await;
-    }
-}
-
-/// Dedicated task to monitor the "other" core for crashes.
-#[embassy_executor::task(pool_size = 2)]
-pub(crate) async fn panic_monitor_task(target_core: usize) -> ! {
-    loop {
-        if let Some(report) = check_core_panic(target_core) {
-            if report.message == "(Incomplete formatting)" {
-                error!("CORE {} PANIC DETECTED (Partial Sentinel)", target_core);
-            } else {
-                error!(
-                    "CORE {} PANIC DETECTED: {} at {}:{}",
-                    target_core,
-                    report.message.as_str(),
-                    report.file.as_str(),
-                    report.line
-                );
-            }
-        }
-        Timer::after_millis(500).await;
     }
 }
 

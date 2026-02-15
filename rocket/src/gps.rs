@@ -1,5 +1,5 @@
 use crate::state_machine::SENSOR_DATA;
-use crate::{GPS, GPSResources, Irqs, local_info};
+use crate::{GPS, GPSResources, Irqs};
 use defmt_rtt as _;
 use embassy_futures::select::{Either, select};
 use embassy_rp::uart::{BufferedUart, Config};

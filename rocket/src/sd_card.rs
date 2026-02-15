@@ -1,6 +1,6 @@
 use crate::{Irqs, SDCard, SDCardResources, error, info, local_error, local_info, warn};
 use core::fmt::Write;
-use embassy_rp::gpio::{AnyPin, Level, Output, Pull};
+use embassy_rp::gpio::{Level, Output};
 use embassy_rp::spi::Spi;
 use embassy_time::{Delay, Duration, Timer};
 use embedded_hal_bus::spi::ExclusiveDevice;
