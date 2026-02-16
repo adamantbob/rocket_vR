@@ -5,7 +5,9 @@ use embassy_time::Timer;
 /// Dedicated task to monitor the "other" core for crashes.
 #[embassy_executor::task(pool_size = 2)]
 pub async fn panic_monitor_task(target_core: usize) -> ! {
+    let current_core = if target_core == 1 { 0 } else { 1 };
     loop {
+        super::stack::sample_stack_usage(current_core);
         if let Some(report) = check_core_panic(target_core) {
             if report.message == "(Incomplete formatting)" {
                 error!("CORE {} PANIC DETECTED (Partial Sentinel)", target_core);

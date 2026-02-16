@@ -1,5 +1,5 @@
-use crate::{Irqs, SDCard, SDCardResources, error, info, local_error, local_info, warn};
-use core::fmt::Write;
+use crate::state_machine::SYSTEM_HEALTH;
+use crate::{Irqs, SDCard, SDCardResources, error};
 use embassy_rp::gpio::{Level, Output};
 use embassy_rp::spi::Spi;
 use embassy_time::{Delay, Duration, Timer};
@@ -95,6 +95,13 @@ pub async fn sd_card_task(r: SDCardResources, _irqs: Irqs) -> ! {
 
     // Phase 5: Continuous Processing Loop
     loop {
+        SYSTEM_HEALTH.sd_health.update(rocket_core::SDCardHealth {
+            tickstamp: embassy_time::Instant::now().as_ticks() as u64,
+            initialized: true,
+            buffer_usage: 0, // TODO: Get actual buffer usage
+            flush_errors: 0,
+        });
+
         // Block until data is available or a maintenance timeout occurs
         let entry_or_timeout =
             select(LOG_CHANNEL.receive(), Timer::after(logger.flush_interval())).await;

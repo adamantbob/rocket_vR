@@ -12,6 +12,7 @@ compile_error!("Mismatched target for RP2040! Please use 'cargo run-pico'");
 #[cfg(all(feature = "rp2350", not(target_arch = "arm")))]
 compile_error!("Mismatched target for RP2350! Please use 'cargo run-pico2'");
 
+use crate::health::stack::paint_stack;
 use cortex_m_rt::entry;
 use defmt::unwrap;
 use defmt_rtt as _;
@@ -58,7 +59,7 @@ define_utilization_tasks!(
     Blinky[0],
     Repl[0],
     StateMachine[0],
-    InitLowPrioTasks[0],
+    USB[0],
     GPS[0],
     IMU[0],
     SDCard[1]
@@ -248,14 +249,25 @@ pub async fn init_low_prio_tasks(
     spawner.spawn(unwrap!(crate::imu::imu_task(imu, Irqs)));
 
     // 3. Start Application Level Tasks
-    spawner.spawn(unwrap!(stats_task(TASK_NAMES, TASK_CORES, Stats)));
+    unsafe {
+        let stack_ptr = core::ptr::addr_of_mut!(crate::CORE1_STACK);
+        let stack_bottom = stack_ptr as *const u32;
+        let stack_top = (stack_ptr as *const u8).add(16384 - 1024) as *const u32;
+
+        spawner.spawn(unwrap!(stats_task(
+            TASK_NAMES,
+            TASK_CORES,
+            Stats,
+            Some((stack_bottom, stack_top)),
+        )));
+    }
     spawner.spawn(unwrap!(blinky()));
 
     // Target core 1 (the executor core)
     spawner.spawn(unwrap!(panic_monitor_task(1)));
 
     // Join the runners that need to stay alive for this core
-    join(usb_runner, core0_repl(&mut class)).await;
+    join(usb_runner.tracked(USB), core0_repl(&mut class)).await;
 }
 
 pub static METRICS_CORE0: instrumented_executor::ExecutorMetrics =
@@ -305,6 +317,15 @@ fn main() -> ! {
         r.CoreResources.core1,
         unsafe { &mut *core::ptr::addr_of_mut!(CORE1_STACK) },
         move || {
+            // Paint the stack for absolute watermark tracking.
+            // Safety: We are at the very beginning of the core's execution context.
+            unsafe {
+                let stack_ptr = core::ptr::addr_of_mut!(CORE1_STACK);
+                let stack_bottom = stack_ptr as *mut u32;
+                // We leave 1KB at the top to avoid overwriting the current frame.
+                let stack_top = (stack_ptr as *mut u8).add(16384 - 1024) as *mut u32;
+                paint_stack(stack_bottom, stack_top);
+            }
             let executor1 = EXECUTOR_CORE1.init(InstrumentedExecutor::new(&METRICS_CORE1));
             executor1.run(|spawner| {
                 spawner.spawn(unwrap!(crate::sd_card::sd_card_task(

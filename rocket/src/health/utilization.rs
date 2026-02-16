@@ -1,7 +1,7 @@
-#[cfg(feature = "verbose-utilization")]
-use crate::debug;
 #[cfg(not(feature = "verbose-utilization"))]
 use crate::warn;
+#[cfg(feature = "verbose-utilization")]
+use crate::{debug, warn};
 use core::future::Future;
 use core::pin::Pin;
 use core::task::{Context, Poll};
@@ -9,7 +9,10 @@ use defmt_rtt as _;
 use embassy_time::{Duration, Instant};
 use portable_atomic::{AtomicU32, Ordering};
 
+use crate::health::stack::{self, sample_stack_usage};
 use crate::instrumented_executor;
+#[cfg(feature = "verbose-utilization")]
+use crate::state_machine::SYSTEM_HEALTH;
 
 struct Percent(f32);
 
@@ -100,6 +103,7 @@ pub async fn stats_task(
     names: &'static [&'static str],
     _task_cores: &'static [u8],
     stats_id: TaskId,
+    _core1_stack_range: Option<(*const u32, *const u32)>,
 ) {
     async move {
         let mut last_idle_c0 = 0u32;
@@ -112,6 +116,10 @@ pub async fn stats_task(
 
         loop {
             embassy_time::Timer::after(Duration::from_secs(1)).await;
+
+            // Sample stack for the core this task is running on
+            sample_stack_usage(0);
+
             let now = embassy_time::Instant::now();
 
             let metrics0 = &crate::METRICS_CORE0;
@@ -176,22 +184,14 @@ pub async fn stats_task(
 
             #[cfg(feature = "verbose-utilization")]
             {
-                debug!("--- CPU Utilization (1s avg) ---");
+                debug!("--- CORE 0 DIAGNOSTICS ---");
                 debug!(
-                    "Core 0 Total:   {} ({} poll/s)",
+                    "Usage: {} ({} poll/s)",
                     Percent(usage0_total),
                     poll0 + interrupt_polls
                 );
-                debug!(
-                    "  High Prio:    {} ({}/s)",
-                    Percent(usage0_high_prio),
-                    interrupt_polls
-                );
-                debug!(
-                    "  Background:   {} ({}/s)",
-                    Percent(usage0_background.max(0.0)),
-                    poll0
-                );
+                debug!("  - High Prio:    {}", Percent(usage0_high_prio));
+                debug!("  - Background:   {}", Percent(usage0_background.max(0.0)));
 
                 for i in 0..task_count {
                     if _task_cores[i] == 0 {
@@ -204,11 +204,17 @@ pub async fn stats_task(
                     }
                 }
 
-                debug!(
-                    "Core 1 Total:   {} ({} poll/s)",
-                    Percent(usage1_total),
-                    poll1
-                );
+                // Core 0: SP Min only (watermark not relevant due to
+                // Embassy's shared MSP overlapping with static task storage)
+                // The Core0 Stack will always hit it's 100% watermark by design.
+                let min_sp0 = stack::OBSERVED_MIN_SP[0].load(Ordering::Relaxed);
+                if min_sp0 != u32::MAX {
+                    debug!("SP Min: 0x{:08X}", min_sp0);
+                }
+
+                debug!("--- CORE 1 DIAGNOSTICS ---");
+                debug!("Usage: {} ({} poll/s)", Percent(usage1_total), poll1);
+
                 for i in 0..task_count {
                     if _task_cores[i] == 1 {
                         debug!(
@@ -219,6 +225,49 @@ pub async fn stats_task(
                         );
                     }
                 }
+
+                if let Some((bottom, top)) = _core1_stack_range {
+                    let watermark = stack::get_stack_high_watermark(bottom, top);
+                    let total_size = (top as u32) - (bottom as u32);
+                    let used_bytes = (top as u32) - watermark;
+                    let peak_percent = (used_bytes as f32 / total_size as f32) * 100.0;
+                    debug!(
+                        "Stack Peak: {} ({} / {} bytes)",
+                        Percent(peak_percent),
+                        used_bytes,
+                        total_size
+                    );
+                    if peak_percent > 85.0 {
+                        warn!(
+                            "ALARM: Core 1 Stack nearing overflow! ({})",
+                            Percent(peak_percent)
+                        );
+                    }
+                }
+                let min_sp1 = stack::OBSERVED_MIN_SP[1].load(Ordering::Relaxed);
+                if min_sp1 != u32::MAX {
+                    debug!("SP Min: 0x{:08X}", min_sp1);
+                }
+
+                debug!("--- SUBSYSTEM HEARTBEATS ---");
+                let now_ticks = Instant::now().as_ticks() as u32;
+
+                let mut check_liveness = |last_update: u32, name: &'static str| {
+                    let elapsed = now_ticks.wrapping_sub(last_update);
+                    if last_update == 0 {
+                        debug!("  {}: Never reported", name);
+                    } else {
+                        debug!("  {}: {}ms ago", name, elapsed / 1000);
+                        if elapsed > 2_000_000 {
+                            warn!("ALARM: {} SUBSYSTEM STALLED ({}ms)", name, elapsed / 1000);
+                        }
+                    }
+                };
+
+                check_liveness(SYSTEM_HEALTH.imu_health.last_updated(), "IMU");
+                check_liveness(SYSTEM_HEALTH.gps_health.last_updated(), "GPS");
+                check_liveness(SYSTEM_HEALTH.wifi_health.last_updated(), "Wifi");
+                check_liveness(SYSTEM_HEALTH.sd_health.last_updated(), "SD");
             }
 
             #[cfg(not(feature = "verbose-utilization"))]
