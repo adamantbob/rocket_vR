@@ -128,22 +128,18 @@ pub async fn stats_task(
             let idle0 = metrics0.idle_ticks.load(Ordering::Relaxed);
             let idle1 = metrics1.idle_ticks.load(Ordering::Relaxed);
 
-            #[allow(unused_variables)]
-            let poll0 = metrics0.poll_count.swap(0, Ordering::Relaxed);
-            #[allow(unused_variables)]
-            let poll1 = metrics1.poll_count.swap(0, Ordering::Relaxed);
-
             let interrupt_active =
                 instrumented_executor::INTERRUPT_ACTIVE_TICKS.load(Ordering::Relaxed);
-            #[allow(unused_variables)]
-            let interrupt_polls =
-                instrumented_executor::INTERRUPT_POLL_COUNT.swap(0, Ordering::Relaxed);
 
             // Time Calculations
             let delta_idle0 = idle0.wrapping_sub(last_idle_c0);
+            debug!("delta_idle0: {}", delta_idle0);
             let delta_idle1 = idle1.wrapping_sub(last_idle_c1);
+            debug!("delta_idle1: {}", delta_idle1);
             let delta_interrupt_active = interrupt_active.wrapping_sub(last_interrupt_active);
+            debug!("delta_interrupt_active: {}", delta_interrupt_active);
             let delta_time = (now - last_time).as_ticks() as u32;
+            debug!("delta_time: {}", delta_time);
 
             if delta_time == 0 {
                 continue;
@@ -155,16 +151,10 @@ pub async fn stats_task(
             // Note: delta_idle0 includes time spent in interrupts that fire during WFE.
             // True Idle = (Total Idle Ticks reported by executor) - (Interrupt Active Ticks).
             let actual_idle0 = delta_idle0.saturating_sub(delta_interrupt_active);
-            #[allow(unused_variables)]
-            let usage0_total = 100.0 * (1.0 - (actual_idle0 as f32 / delta_time as f32));
-            #[allow(unused_variables)]
-            let usage0_high_prio = 100.0 * (delta_interrupt_active as f32 / delta_time as f32);
-            #[allow(unused_variables)]
-            let usage0_background = usage0_total - usage0_high_prio;
+            let usage0_total = 100.0 * (actual_idle0 as f32 / delta_time as f32);
 
             // Core 1: Currently only thread activity tracked.
-            #[allow(unused_variables)]
-            let usage1_total = 100.0 * (1.0 - (delta_idle1 as f32 / delta_time as f32));
+            let usage1_total = 100.0 * (delta_idle1 as f32 / delta_time as f32);
 
             let mut task_usages = [0.0f32; MAX_TASKS];
             let mut task_poll_deltas = [0u32; MAX_TASKS];
@@ -184,6 +174,14 @@ pub async fn stats_task(
 
             #[cfg(feature = "verbose-utilization")]
             {
+                let poll0 = metrics0.poll_count.swap(0, Ordering::Relaxed);
+                let poll1 = metrics1.poll_count.swap(0, Ordering::Relaxed);
+                let interrupt_polls =
+                    instrumented_executor::INTERRUPT_POLL_COUNT.swap(0, Ordering::Relaxed);
+
+                let usage0_high_prio = 100.0 * (delta_interrupt_active as f32 / delta_time as f32);
+                let usage0_background = usage0_total - usage0_high_prio;
+
                 debug!("--- CORE 0 DIAGNOSTICS ---");
                 debug!(
                     "Usage: {} ({} poll/s)",

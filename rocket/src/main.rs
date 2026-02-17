@@ -12,7 +12,6 @@ compile_error!("Mismatched target for RP2040! Please use 'cargo run-pico'");
 #[cfg(all(feature = "rp2350", not(target_arch = "arm")))]
 compile_error!("Mismatched target for RP2350! Please use 'cargo run-pico2'");
 
-use crate::health::stack::paint_stack;
 use cortex_m_rt::entry;
 use defmt::unwrap;
 use defmt_rtt as _;
@@ -20,7 +19,7 @@ use embassy_executor::Spawner;
 use embassy_futures::join::join;
 use embassy_rp::interrupt::{InterruptExt, Priority};
 use embassy_rp::multicore::{Stack, spawn_core1};
-use embassy_rp::peripherals::{DMA_CH0, DMA_CH3, DMA_CH4, I2C0, PIO0, SPI0, UART0, USB};
+use embassy_rp::peripherals::{DMA_CH0, DMA_CH3, DMA_CH4, I2C0, PIO0, UART0, USB};
 use embassy_rp::usb::{Driver, Instance};
 use embassy_rp::{bind_interrupts, interrupt};
 use embassy_time::{Duration, Timer};
@@ -62,7 +61,9 @@ define_utilization_tasks!(
     USB[0],
     GPS[0],
     IMU[0],
-    SDCard[1]
+    PanicMonitor0[0],
+    SDCard[1],
+    PanicMonitor1[1]
 );
 
 assign_resources! {

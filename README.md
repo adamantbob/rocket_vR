@@ -140,3 +140,4 @@ The system features a **Bidirectional Cross-Core Panic Monitoring** system desig
 ## To-Do (Unprioritized)
 
 - Have 'cargo build' generate the uf2 file for manually loading onto the Pi
+- 
