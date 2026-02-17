@@ -1,3 +1,4 @@
+use embassy_rp::multicore::Stack;
 use portable_atomic::{AtomicU32, Ordering};
 
 /// Sentinel pattern used to detect uninitialized stack memory.
@@ -58,26 +59,19 @@ pub fn get_stack_high_watermark(stack_bottom: *const u32, stack_top: *const u32)
     stack_top as u32
 }
 
-/// Safety wrapper to paint the current stack.
-///
-/// Calculates the stack range based on the current SP, a safety margin,
-/// and the desired paint size.
+/// Sets up the high watermark tracking for core 1's stack.
 ///
 /// # Arguments
-/// * `safety_margin` - Number of bytes below current SP to leave untouched.
-/// * `paint_size` - Number of bytes to paint below the safety margin.
-///
-/// # Returns
-/// * `(start, end)` - The tuple of (bottom, top) addresses of the painted region.
+/// * `stack` - The stack to track.
 ///
 /// # Safety
-/// Caller must ensure `paint_size` does not exceed available stack memory.
-pub unsafe fn paint_current_stack(safety_margin: u32, paint_size: u32) -> (u32, u32) {
-    let sp = get_current_sp();
-    let stack_top = (sp - safety_margin) as *mut u32;
-    let stack_bottom = (sp - (safety_margin + paint_size)) as *mut u32;
-    unsafe { paint_stack(stack_bottom, stack_top) };
-    (stack_bottom as u32, stack_top as u32)
+/// Caller must ensure this is called at the very beginning of the core's execution context.
+pub unsafe fn setup_core1_stack_high_watermark_tracking(stack_ptr: *mut u32, stack_size: usize) {
+    // We leave 1KB at the top to avoid overwriting the current frame.
+    unsafe {
+        let stack_top = (stack_ptr as *mut u8).add(stack_size - 1024) as *mut u32;
+        paint_stack(stack_ptr, stack_top)
+    };
 }
 
 pub struct StackStats {

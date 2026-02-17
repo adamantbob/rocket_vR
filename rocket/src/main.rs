@@ -278,7 +278,9 @@ pub static METRICS_CORE1: instrumented_executor::ExecutorMetrics =
 static EXECUTOR_HIGH: StaticCell<InstrumentedInterruptExecutor> = StaticCell::new();
 static EXECUTOR_LOW: StaticCell<InstrumentedExecutor> = StaticCell::new();
 
-static mut CORE1_STACK: Stack<16384> = Stack::new();
+const CORE1_STACK_SIZE: usize = 16384;
+
+static mut CORE1_STACK: Stack<CORE1_STACK_SIZE> = Stack::new();
 static EXECUTOR_CORE1: StaticCell<InstrumentedExecutor> = StaticCell::new();
 
 #[interrupt]
@@ -319,12 +321,13 @@ fn main() -> ! {
         move || {
             // Paint the stack for absolute watermark tracking.
             // Safety: We are at the very beginning of the core's execution context.
+            // Only core 1 is tracked for high water mark as core 0's stack
+            // is calculated for size.
             unsafe {
-                let stack_ptr = core::ptr::addr_of_mut!(CORE1_STACK);
-                let stack_bottom = stack_ptr as *mut u32;
-                // We leave 1KB at the top to avoid overwriting the current frame.
-                let stack_top = (stack_ptr as *mut u8).add(16384 - 1024) as *mut u32;
-                paint_stack(stack_bottom, stack_top);
+                health::stack::setup_core1_stack_high_watermark_tracking(
+                    &raw mut CORE1_STACK as *mut u32,
+                    CORE1_STACK_SIZE,
+                );
             }
             let executor1 = EXECUTOR_CORE1.init(InstrumentedExecutor::new(&METRICS_CORE1));
             executor1.run(|spawner| {
