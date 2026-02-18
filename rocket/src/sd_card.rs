@@ -11,8 +11,10 @@ use static_cell::StaticCell;
 use embassy_futures::select::{Either, select};
 use rocket_core::log::{LOG_CHANNEL, LogBuffer};
 
-pub const MAX_OPEN_FILES: usize = 4;
-pub const MAX_NAME_LEN: usize = 11;
+// Define this to match the internal storage of VolumeManager
+const MAX_OPEN_FILES: usize = 4;
+// 11 bytes is for "LOG_XXX.CSV"
+const MAX_NAME_LEN: usize = 11;
 
 pub mod logger;
 

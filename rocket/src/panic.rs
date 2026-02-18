@@ -262,6 +262,7 @@ fn panic(info: &PanicInfo) -> ! {
         info.location().map(|l| l.file()).unwrap_or("?"),
         line
     );
+    error!("{}", defmt::Display2Format(&info.message()));
 
     for _ in 0..10_000_000 {
         cortex_m::asm::nop();

@@ -31,7 +31,9 @@ use static_cell::StaticCell;
 mod panic;
 
 mod instrumented_executor;
-use instrumented_executor::{InstrumentedExecutor, InstrumentedInterruptExecutor};
+use instrumented_executor::{
+    INTERRUPT_EX_PTR, InstrumentedExecutor, InstrumentedInterruptExecutor,
+};
 
 mod channels;
 mod datacells;
@@ -282,7 +284,7 @@ pub static METRICS_CORE0: instrumented_executor::ExecutorMetrics =
 pub static METRICS_CORE1: instrumented_executor::ExecutorMetrics =
     instrumented_executor::ExecutorMetrics::new();
 
-static EXECUTOR_HIGH: InstrumentedInterruptExecutor = InstrumentedInterruptExecutor::new();
+static EXECUTOR_HIGH: StaticCell<InstrumentedInterruptExecutor> = StaticCell::new();
 static EXECUTOR_LOW: StaticCell<InstrumentedExecutor> = StaticCell::new();
 
 static mut CORE1_STACK: Stack<16384> = Stack::new();
@@ -290,7 +292,16 @@ static EXECUTOR_CORE1: StaticCell<InstrumentedExecutor> = StaticCell::new();
 
 #[interrupt]
 unsafe fn SWI_IRQ_1() {
-    unsafe { EXECUTOR_HIGH.on_interrupt() }
+    // Acquire the pointer set during start()
+    let ptr = INTERRUPT_EX_PTR.load(portable_atomic::Ordering::Acquire);
+
+    if !ptr.is_null() {
+        unsafe {
+            // Safety: We know this points to a 'static mut InstrumentedInterruptExecutor
+            // because that's the only thing that stores to INTERRUPT_EX_PTR.
+            (*ptr).on_interrupt();
+        }
+    }
 }
 
 #[entry]
@@ -299,9 +310,15 @@ fn main() -> ! {
     let r = AssignedResources::take(p);
 
     // High-priority executor: SWI_IRQ_1, priority level 2
+    local_info!("1");
+    let exec_high = EXECUTOR_HIGH.init(InstrumentedInterruptExecutor::new());
+    local_info!("2");
     interrupt::SWI_IRQ_1.set_priority(Priority::P2);
-    let spawner = EXECUTOR_HIGH.start(interrupt::SWI_IRQ_1);
+    local_info!("3");
+    let spawner = exec_high.start(interrupt::SWI_IRQ_1);
+    local_info!("4");
     spawner.spawn(unwrap!(state_machine::state_machine_task()));
+    local_info!("5");
 
     // Spawn the SD Card task on Core 1.
     // The SD Card is blocking and the lowest priority, so it should run on a separate core.
