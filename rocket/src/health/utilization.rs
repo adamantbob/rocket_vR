@@ -133,13 +133,9 @@ pub async fn stats_task(
 
             // Time Calculations
             let delta_idle0 = idle0.wrapping_sub(last_idle_c0);
-            debug!("delta_idle0: {}", delta_idle0);
             let delta_idle1 = idle1.wrapping_sub(last_idle_c1);
-            debug!("delta_idle1: {}", delta_idle1);
             let delta_interrupt_active = interrupt_active.wrapping_sub(last_interrupt_active);
-            debug!("delta_interrupt_active: {}", delta_interrupt_active);
             let delta_time = (now - last_time).as_ticks() as u32;
-            debug!("delta_time: {}", delta_time);
 
             if delta_time == 0 {
                 continue;
@@ -151,10 +147,10 @@ pub async fn stats_task(
             // Note: delta_idle0 includes time spent in interrupts that fire during WFE.
             // True Idle = (Total Idle Ticks reported by executor) - (Interrupt Active Ticks).
             let actual_idle0 = delta_idle0.saturating_sub(delta_interrupt_active);
-            let usage0_total = 100.0 * (actual_idle0 as f32 / delta_time as f32);
+            let usage0_total = 100.0 * (1.0 - (actual_idle0 as f32 / delta_time as f32));
 
             // Core 1: Currently only thread activity tracked.
-            let usage1_total = 100.0 * (delta_idle1 as f32 / delta_time as f32);
+            let usage1_total = 100.0 * (1.0 - (delta_idle1 as f32 / delta_time as f32));
 
             let mut task_usages = [0.0f32; MAX_TASKS];
             let mut task_poll_deltas = [0u32; MAX_TASKS];

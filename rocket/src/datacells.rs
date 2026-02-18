@@ -1,7 +1,6 @@
 // datacells.rs
 // This file holds the source for the "library" of data coming from different sensors
 // Each cell represent one chunk of data that can be read together.
-use core::cell::Cell;
 use defmt::info;
 
 pub use rocket_core::datacells::DataCell;

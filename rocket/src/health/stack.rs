@@ -1,4 +1,3 @@
-use embassy_rp::multicore::Stack;
 use portable_atomic::{AtomicU32, Ordering};
 
 /// Sentinel pattern used to detect uninitialized stack memory.

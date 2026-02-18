@@ -304,15 +304,10 @@ fn main() -> ! {
     let r = AssignedResources::take(p);
 
     // High-priority executor: SWI_IRQ_1, priority level 2
-    local_info!("1");
     let exec_high = EXECUTOR_HIGH.init(InstrumentedInterruptExecutor::new());
-    local_info!("2");
     interrupt::SWI_IRQ_1.set_priority(Priority::P2);
-    local_info!("3");
     let spawner = exec_high.start(interrupt::SWI_IRQ_1);
-    local_info!("4");
     spawner.spawn(unwrap!(state_machine::state_machine_task()));
-    local_info!("5");
 
     // Spawn the SD Card task on Core 1.
     // The SD Card is blocking and the lowest priority, so it should run on a separate core.
