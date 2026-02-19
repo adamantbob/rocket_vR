@@ -72,19 +72,3 @@ pub unsafe fn setup_core1_stack_high_watermark_tracking(stack_ptr: *mut u32, sta
         paint_stack(stack_ptr, stack_top)
     };
 }
-
-pub struct StackStats {
-    pub current_usage_bytes: u32,
-    pub peak_usage_bytes: u32,
-    pub total_size_bytes: u32,
-}
-
-impl StackStats {
-    pub fn usage_percent(&self) -> f32 {
-        (self.peak_usage_bytes as f32 / self.total_size_bytes as f32) * 100.0
-    }
-
-    pub fn current_percent(&self) -> f32 {
-        (self.current_usage_bytes as f32 / self.total_size_bytes as f32) * 100.0
-    }
-}

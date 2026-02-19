@@ -48,7 +48,7 @@ pub fn save_flight_data(data: PersistentData) {
 }
 
 /// Invalidates the persistent storage. Use this for fresh launches.
-pub fn clear_persistence() {
+pub fn _clear_persistence() {
     unsafe {
         BOOT_SIGNATURE = 0;
     }

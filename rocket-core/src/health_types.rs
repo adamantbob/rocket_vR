@@ -47,11 +47,11 @@ pub struct CPUHealth {
 }
 
 impl CPUHealth {
-    pub const fn new() -> Self {
+    pub const fn new(usage_c0: u8, usage_c1: u8) -> Self {
         Self {
             tickstamp: 0,
-            usage_c0: 0,
-            usage_c1: 0,
+            usage_c0,
+            usage_c1,
         }
     }
 }

@@ -21,7 +21,7 @@ pub async fn panic_monitor_task(target_core: usize) -> ! {
                     } else {
                         error!(
                             "CORE {} PANIC DETECTED: {} at {}:{}",
-                            target_core,
+                            report.core_id,
                             report.message.as_str(),
                             report.file.as_str(),
                             report.line
