@@ -33,7 +33,7 @@ pub static SYSTEM_HEALTH: SystemHealth = SystemHealth {
     gps_health: DataCell::new(GPSHealth::new()),
     wifi_health: DataCell::new(WifiHealth::new()),
     sd_health: DataCell::new(SDCardHealth::new()),
-    cpu_health: DataCell::new(CPUHealth::new()),
+    cpu_health: DataCell::new(CPUHealth::new(0, 0)),
 };
 
 // State Machine Task.

@@ -20,7 +20,7 @@ const LOG_BUFFER_SIZE: usize = 4096;
 // Initialization Speed for the SD Card
 const SD_INIT_BAUD_RATE: u32 = 400_000;
 // Operational Speed for the SD Card
-const SD_OP_BAUD_RATE: u32 = 2_000_000;
+const SD_OP_BAUD_RATE: u32 = 16_000_000;
 // Flush interval for the SD Card
 const SD_FLUSH_INTERVAL: Duration = Duration::from_secs(5);
 // Sync interval for the SD Card
@@ -61,6 +61,7 @@ pub async fn sd_card_task(r: SDCardResources, _irqs: Irqs) -> ! {
 
     // Phase 1: Setup SPI with DMA at discovery frequency (400kHz)
     let mut config = embassy_rp::spi::Config::default();
+    config.frequency = SD_INIT_BAUD_RATE;
 
     let mut spi = Spi::new(
         r.spi, r.clk, r.mosi, r.miso, r.dma_tx, r.dma_rx, Irqs, config,

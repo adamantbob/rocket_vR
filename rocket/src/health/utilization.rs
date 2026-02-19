@@ -8,25 +8,12 @@ use core::task::{Context, Poll};
 use defmt_rtt as _;
 use embassy_time::{Duration, Instant};
 use portable_atomic::{AtomicU32, Ordering};
+use rocket_core::CPUHealth;
 
 use crate::health::stack::{self, sample_stack_usage};
 use crate::instrumented_executor;
 #[cfg(feature = "verbose-utilization")]
 use crate::state_machine::SYSTEM_HEALTH;
-
-struct Percent(f32);
-
-impl defmt::Format for Percent {
-    fn format(&self, fmt: defmt::Formatter) {
-        defmt::write!(fmt, "{}.{}%", self.0 as u32, ((self.0 * 10.0) as u32) % 10)
-    }
-}
-
-impl core::fmt::Display for Percent {
-    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
-        write!(f, "{}.{}%", self.0 as u32, ((self.0 * 10.0) as u32) % 10)
-    }
-}
 
 // Utilization Tracking
 // ===================
@@ -34,20 +21,66 @@ impl core::fmt::Display for Percent {
 // This module provides a simple way to track the utilization of tasks in the system.
 // It supports a flexible number of tasks up to MAX_TASKS.
 // Compile-time safety is ensured by validating the task count during setup.
+//
+// All percentages are represented as u32 in units of 0.1% (tenths of a percent).
+// 1000 == 100.0%, 10 == 1.0%, 1 == 0.1%.
+// This avoids all floating-point arithmetic on the hot stats path.
+
+/// A utilization percentage stored as a `u32` in units of 0.1%.
+///
+/// `1000` = 100.0%, `10` = 1.0%, `1` = 0.1%.
+#[derive(Clone, Copy)]
+struct Percent(u32);
+
+impl Percent {
+    /// Compute `(numerator / denominator) * 100`, returning tenths of a percent.
+    ///
+    /// Uses `saturating_mul` to prevent overflow on large tick deltas.
+    /// Returns `Percent(0)` if `denominator` is zero.
+    fn from_ticks(numerator: u32, denominator: u32) -> Self {
+        if denominator == 0 {
+            return Percent(0);
+        }
+        Percent(numerator.saturating_mul(1000) / denominator)
+    }
+
+    /// Saturating subtraction — clamps to zero rather than wrapping.
+    fn saturating_sub(self, other: Percent) -> Percent {
+        Percent(self.0.saturating_sub(other.0))
+    }
+
+    /// Return the whole-percent part, rounded up, for use in coarse health metrics.
+    fn ceil_percent(self) -> u8 {
+        ((self.0 + 9) / 10).min(100) as u8
+    }
+}
+
+impl defmt::Format for Percent {
+    fn format(&self, fmt: defmt::Formatter) {
+        defmt::write!(fmt, "{}.{}%", self.0 / 10, self.0 % 10)
+    }
+}
+
+impl core::fmt::Display for Percent {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        write!(f, "{}.{}%", self.0 / 10, self.0 % 10)
+    }
+}
 
 #[derive(Clone, Copy)]
 pub struct TaskId(pub usize);
 
 pub const MAX_TASKS: usize = 16;
 
+// Thresholds in tenths of a percent (1000 == 100.0%).
 #[cfg(not(feature = "verbose-utilization"))]
-pub const TASK_USAGE_THRESHOLD: f32 = 10.0;
+pub const TASK_USAGE_THRESHOLD: u32 = 100; // 10.0%
 #[cfg(not(feature = "verbose-utilization"))]
-pub const TOTAL_USAGE_WARNING_THRESHOLD: f32 = 40.0;
+pub const TOTAL_USAGE_WARNING_THRESHOLD: u32 = 400; // 40.0%
 #[cfg(not(feature = "verbose-utilization"))]
-pub const TOTAL_USAGE_ALARM_THRESHOLD: f32 = 80.0;
+pub const TOTAL_USAGE_ALARM_THRESHOLD: u32 = 800; // 80.0%
 #[cfg(not(feature = "verbose-utilization"))]
-pub const HIGH_PRIORITY_TASK_USAGE_THRESHOLD: f32 = 20.0;
+pub const HIGH_PRIORITY_TASK_USAGE_THRESHOLD: u32 = 200; // 20.0%
 
 // Multicore safe profiling using atomics.
 static TASK_TICKS: [AtomicU32; MAX_TASKS] = [const { AtomicU32::new(0) }; MAX_TASKS];
@@ -117,7 +150,7 @@ pub async fn stats_task(
         loop {
             embassy_time::Timer::after(Duration::from_secs(1)).await;
 
-            // Sample stack for the core this task is running on
+            // Sample stack for the core this task is running on.
             sample_stack_usage(0);
 
             let now = embassy_time::Instant::now();
@@ -127,11 +160,9 @@ pub async fn stats_task(
 
             let idle0 = metrics0.idle_ticks.load(Ordering::Relaxed);
             let idle1 = metrics1.idle_ticks.load(Ordering::Relaxed);
-
             let interrupt_active =
                 instrumented_executor::INTERRUPT_ACTIVE_TICKS.load(Ordering::Relaxed);
 
-            // Time Calculations
             let delta_idle0 = idle0.wrapping_sub(last_idle_c0);
             let delta_idle1 = idle1.wrapping_sub(last_idle_c1);
             let delta_interrupt_active = interrupt_active.wrapping_sub(last_interrupt_active);
@@ -142,27 +173,33 @@ pub async fn stats_task(
             }
 
             // --- CPU Usage Calculations ---
-
-            // Core 0: Has both thread and interrupt activity.
-            // Note: delta_idle0 includes time spent in interrupts that fire during WFE.
-            // True Idle = (Total Idle Ticks reported by executor) - (Interrupt Active Ticks).
+            //
+            // Core 0: delta_idle0 includes time spent in interrupts that fire during WFE,
+            // so we subtract interrupt active time to get true thread-mode idle.
             let actual_idle0 = delta_idle0.saturating_sub(delta_interrupt_active);
-            let usage0_total = 100.0 * (1.0 - (actual_idle0 as f32 / delta_time as f32));
+            let usage0_total =
+                Percent::from_ticks(delta_time.saturating_sub(actual_idle0), delta_time);
 
-            // Core 1: Currently only thread activity tracked.
-            let usage1_total = 100.0 * (1.0 - (delta_idle1 as f32 / delta_time as f32));
+            // Core 1: thread activity only.
+            let usage1_total =
+                Percent::from_ticks(delta_time.saturating_sub(delta_idle1), delta_time);
 
-            let mut task_usages = [0.0f32; MAX_TASKS];
+            // Publish coarse CPU health (whole percent, rounded up).
+            let cpu_health =
+                CPUHealth::new(usage0_total.ceil_percent(), usage1_total.ceil_percent());
+            SYSTEM_HEALTH.cpu_health.update(cpu_health);
+
+            // Per-task usage.
+            let mut task_usages = [Percent(0); MAX_TASKS];
             let mut task_poll_deltas = [0u32; MAX_TASKS];
 
             for i in 0..task_count {
                 let ticks = get_task_ticks(i);
                 let polls = get_task_polls(i);
-                let delta = ticks.wrapping_sub(last_task_ticks[i]);
-                let poll_delta = polls.wrapping_sub(last_task_polls[i]);
 
-                task_usages[i] = 100.0 * (delta as f32 / delta_time as f32);
-                task_poll_deltas[i] = poll_delta;
+                task_usages[i] =
+                    Percent::from_ticks(ticks.wrapping_sub(last_task_ticks[i]), delta_time);
+                task_poll_deltas[i] = polls.wrapping_sub(last_task_polls[i]);
 
                 last_task_ticks[i] = ticks;
                 last_task_polls[i] = polls;
@@ -175,47 +212,33 @@ pub async fn stats_task(
                 let interrupt_polls =
                     instrumented_executor::INTERRUPT_POLL_COUNT.swap(0, Ordering::Relaxed);
 
-                let usage0_high_prio = 100.0 * (delta_interrupt_active as f32 / delta_time as f32);
-                let usage0_background = usage0_total - usage0_high_prio;
+                let usage0_high_prio = Percent::from_ticks(delta_interrupt_active, delta_time);
+                let usage0_background = usage0_total.saturating_sub(usage0_high_prio);
 
-                debug!("--- CORE 0 DIAGNOSTICS ---");
+                // --- COMPACT REPORT FORMAT ---
+                //
+                // [Core0 <total> HP:<high_prio> BG:<background> | <polls>/s]
+                //   <TaskName>: <pct> (<polls>/s)
+                //   ...
+                // [Core1 <total> Stk:<peak> (<used>/<total> bytes) | <polls>/s]
+                //   <TaskName>: <pct> (<polls>/s)
+                //   ...
+                // [Heartbeats]
+                //   <Subsystem>: <age>ms
+
                 debug!(
-                    "Usage: {} ({} poll/s)",
-                    Percent(usage0_total),
-                    poll0 + interrupt_polls
+                    "[Core0 {} HP:{} BG:{} | {}p/s]",
+                    usage0_total,
+                    usage0_high_prio,
+                    usage0_background,
+                    poll0 + interrupt_polls,
                 );
-                debug!("  - High Prio:    {}", Percent(usage0_high_prio));
-                debug!("  - Background:   {}", Percent(usage0_background.max(0.0)));
 
                 for i in 0..task_count {
                     if _task_cores[i] == 0 {
                         debug!(
-                            "    {}: {} ({}/s)",
-                            names[i],
-                            Percent(task_usages[i]),
-                            task_poll_deltas[i]
-                        );
-                    }
-                }
-
-                // Core 0: SP Min only (watermark not relevant due to
-                // Embassy's shared MSP overlapping with static task storage)
-                // The Core0 Stack will always hit it's 100% watermark by design.
-                let min_sp0 = stack::OBSERVED_MIN_SP[0].load(Ordering::Relaxed);
-                if min_sp0 != u32::MAX {
-                    debug!("SP Min: 0x{:08X}", min_sp0);
-                }
-
-                debug!("--- CORE 1 DIAGNOSTICS ---");
-                debug!("Usage: {} ({} poll/s)", Percent(usage1_total), poll1);
-
-                for i in 0..task_count {
-                    if _task_cores[i] == 1 {
-                        debug!(
-                            "    {}: {} ({}/s)",
-                            names[i],
-                            Percent(task_usages[i]),
-                            task_poll_deltas[i]
+                            "  {}: {} ({}/s)",
+                            names[i], task_usages[i], task_poll_deltas[i]
                         );
                     }
                 }
@@ -224,36 +247,43 @@ pub async fn stats_task(
                     let watermark = stack::get_stack_high_watermark(bottom, top);
                     let total_size = (top as u32) - (bottom as u32);
                     let used_bytes = (top as u32) - watermark;
-                    let peak_percent = (used_bytes as f32 / total_size as f32) * 100.0;
+                    let peak = Percent::from_ticks(used_bytes, total_size);
+
                     debug!(
-                        "Stack Peak: {} ({} / {} bytes)",
-                        Percent(peak_percent),
-                        used_bytes,
-                        total_size
+                        "[Core1 {} Stk:{} ({}/{} bytes) | {}p/s]",
+                        usage1_total, peak, used_bytes, total_size, poll1,
                     );
-                    if peak_percent > 85.0 {
-                        warn!(
-                            "ALARM: Core 1 Stack nearing overflow! ({})",
-                            Percent(peak_percent)
+
+                    // 85.0% == 850 in tenths-of-a-percent
+                    if peak.0 > 850 {
+                        warn!("ALARM: Core 1 stack nearing overflow! ({})", peak);
+                    }
+                } else {
+                    debug!("[Core1 {} | {}p/s]", usage1_total, poll1);
+                }
+
+                for i in 0..task_count {
+                    if _task_cores[i] == 1 {
+                        debug!(
+                            "  {}: {} ({}/s)",
+                            names[i], task_usages[i], task_poll_deltas[i]
                         );
                     }
                 }
-                let min_sp1 = stack::OBSERVED_MIN_SP[1].load(Ordering::Relaxed);
-                if min_sp1 != u32::MAX {
-                    debug!("SP Min: 0x{:08X}", min_sp1);
-                }
 
-                debug!("--- SUBSYSTEM HEARTBEATS ---");
+                debug!("[Heartbeats]");
+
                 let now_ticks = Instant::now().as_ticks() as u32;
-
-                let mut check_liveness = |last_update: u32, name: &'static str| {
-                    let elapsed = now_ticks.wrapping_sub(last_update);
+                let check_liveness = |last_update: u32, name: &'static str| {
                     if last_update == 0 {
-                        debug!("  {}: Never reported", name);
+                        debug!("  {}: never", name);
                     } else {
-                        debug!("  {}: {}ms ago", name, elapsed / 1000);
+                        let elapsed = now_ticks.wrapping_sub(last_update);
+                        let age_ms = elapsed / 1000;
                         if elapsed > 2_000_000 {
-                            warn!("ALARM: {} SUBSYSTEM STALLED ({}ms)", name, elapsed / 1000);
+                            warn!("ALARM: {} SUBSYSTEM STALLED ({}ms)", name, age_ms);
+                        } else {
+                            debug!("  {}: {}ms", name, age_ms);
                         }
                     }
                 };
@@ -266,15 +296,13 @@ pub async fn stats_task(
 
             #[cfg(not(feature = "verbose-utilization"))]
             {
-                // Summary/Warning logic can be added here if needed,
-                // but let's stick to the verbose report the user is watching.
-                if usage0_total > TOTAL_USAGE_ALARM_THRESHOLD
-                    || usage1_total > TOTAL_USAGE_ALARM_THRESHOLD
+                // In non-verbose mode, only warn when alarm threshold is crossed.
+                if usage0_total.0 > TOTAL_USAGE_ALARM_THRESHOLD
+                    || usage1_total.0 > TOTAL_USAGE_ALARM_THRESHOLD
                 {
                     warn!(
                         "HIGH CPU LOAD: Core 0: {}, Core 1: {}",
-                        Percent(usage0_total),
-                        Percent(usage1_total)
+                        usage0_total, usage1_total,
                     );
                 }
             }
@@ -295,7 +323,7 @@ pub async fn stats_task(
 ///
 /// # Example
 /// ```rust
-/// define_utilization_tasks!(Wifi, Usb, Blinky);
+/// define_utilization_tasks!(Wifi [0], Usb [0], Blinky [1]);
 /// ```
 #[macro_export]
 macro_rules! define_utilization_tasks {
