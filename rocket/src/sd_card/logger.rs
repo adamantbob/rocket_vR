@@ -51,6 +51,8 @@ where
             assert!(N >= 512, "SdLogger buffer size must be at least 512 bytes");
         }
         let v_idx = VolumeIdx(0);
+        // Intentional Delay to let the bus settle
+        Timer::after_millis(200).await;
         let v_handle = mgr.open_raw_volume(v_idx).map_err(|e| {
             error!("Failed to open volume: {:?}", defmt::Debug2Format(&e));
         })?;

@@ -15,6 +15,18 @@ use rocket_core::log::{LOG_CHANNEL, LogBuffer};
 const MAX_OPEN_FILES: usize = 4;
 // 11 bytes is for "LOG_XXX.CSV"
 const MAX_NAME_LEN: usize = 11;
+// Logger buffer size
+const LOG_BUFFER_SIZE: usize = 4096;
+// Initialization Speed for the SD Card
+const SD_INIT_BAUD_RATE: u32 = 400_000;
+// Operational Speed for the SD Card
+const SD_OP_BAUD_RATE: u32 = 2_000_000;
+// Flush interval for the SD Card
+const SD_FLUSH_INTERVAL: Duration = Duration::from_secs(5);
+// Sync interval for the SD Card
+const SD_SYNC_INTERVAL: Duration = Duration::from_secs(10);
+// Health interval for the SD Card
+const SD_HEALTH_INTERVAL: Duration = Duration::from_secs(1);
 
 pub mod logger;
 
@@ -44,12 +56,11 @@ impl embedded_sdmmc::TimeSource for DummyTime {
 #[tracked_task(SDCard)]
 #[embassy_executor::task]
 pub async fn sd_card_task(r: SDCardResources, _irqs: Irqs) -> ! {
-    static BUFFER: StaticCell<LogBuffer<4096>> = StaticCell::new();
+    static BUFFER: StaticCell<LogBuffer<LOG_BUFFER_SIZE>> = StaticCell::new();
     let buffer = BUFFER.init(LogBuffer::new());
 
     // Phase 1: Setup SPI with DMA at discovery frequency (400kHz)
     let mut config = embassy_rp::spi::Config::default();
-    config.frequency = 400_000;
 
     let mut spi = Spi::new(
         r.spi, r.clk, r.mosi, r.miso, r.dma_tx, r.dma_rx, Irqs, config,
@@ -70,7 +81,7 @@ pub async fn sd_card_task(r: SDCardResources, _irqs: Irqs) -> ! {
     }
 
     // Phase 3: Operational frequency boost
-    spi.set_frequency(16_000_000);
+    spi.set_frequency(SD_OP_BAUD_RATE);
     let spi_dev = ExclusiveDevice::new_no_delay(spi, cs);
     let volume_mgr = VolumeManager::new(SdCard::new(spi_dev, Delay), DummyTime);
 
@@ -78,9 +89,9 @@ pub async fn sd_card_task(r: SDCardResources, _irqs: Irqs) -> ! {
     let mut logger = match SdLogger::initialize(
         volume_mgr,
         buffer,
-        Duration::from_secs(5),  // Flush every 5s
-        Duration::from_secs(10), // Sync every 10s
-        Duration::from_secs(1),  // Health every 1s
+        SD_FLUSH_INTERVAL,
+        SD_SYNC_INTERVAL,
+        SD_HEALTH_INTERVAL,
     )
     .await
     {
