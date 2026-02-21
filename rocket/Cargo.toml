@@ -7,7 +7,6 @@ default-run = "rocket_vR"
 [features]
 verbose-utilization = []
 debug_imu = []
-default = ["rp2350"]
 rp2040 = ["embassy-rp/rp2040"]
 rp2350 = ["embassy-rp/rp235xa"]
 
@@ -90,6 +89,16 @@ embedded-sdmmc = { version = "0.8.0", default-features = false }
 
 proc-macros = { path = "../proc-macros" }
 rocket-core = { path = "../rocket-core", features = ["defmt"] }
+
+[profile.release]
+debug = 2
+lto = true
+opt-level = 'z'
+
+[profile.dev]
+debug = 2
+lto = true
+opt-level = 'z'
 
 [[bin]]
 name = "rocket_vR"

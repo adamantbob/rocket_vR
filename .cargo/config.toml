@@ -1,5 +1,5 @@
 [target.'cfg(all(target_arch = "arm", target_os = "none"))']
-runner = "probe-rs run --chip RP235x"
+runner = "probe-rs run --chip RP2350"
 # runner = "picotool load -u -v -x -t elf"
 
 [alias]
@@ -9,7 +9,6 @@ build-pico = "build -p rocket_vR --target thumbv6m-none-eabi --features rp2040"
 build-pico2 = "build -p rocket_vR --target thumbv8m.main-none-eabihf --features rp2350"
 
 [build]
-target = "thumbv8m.main-none-eabihf"
 
 [env]
 DEFMT_LOG = "debug"
