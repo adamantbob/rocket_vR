@@ -1,0 +1,25 @@
+{
+    "rust-analyzer.cargo.features": [
+        "rp2350"
+    ],
+    "rust-analyzer.cargo.target": "thumbv8m.main-none-eabihf",
+    "rust-analyzer.cargo.noDefaultFeatures": false,
+    "rust-analyzer.cargo.allTargets": false,
+    "rust-analyzer.check.overrideCommand": [
+        "cargo",
+        "check",
+        "--workspace",
+        "--exclude",
+        "rocket-sitl-ksp",
+        "--target",
+        "thumbv8m.main-none-eabihf",
+        "--features",
+        "rp2350",
+        "--message-format=json"
+    ],
+    "rust-analyzer.procMacro.enable": true,
+    "rust-analyzer.diagnostics.disabled": [
+        "unresolved-extern-crate"
+    ],
+    "rust-analyzer.diagnostics.enableExperimental": false
+}
