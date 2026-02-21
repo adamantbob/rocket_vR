@@ -14,6 +14,7 @@ use crate::health::stack::{self, sample_stack_usage};
 use crate::instrumented_executor;
 #[cfg(feature = "verbose-utilization")]
 use crate::state_machine::SYSTEM_HEALTH;
+use rocket_core::log::{LOG_CHANNEL, LogEntry};
 
 // Utilization Tracking
 // ===================
@@ -185,9 +186,12 @@ pub async fn stats_task(
                 Percent::from_ticks(delta_time.saturating_sub(delta_idle1), delta_time);
 
             // Publish coarse CPU health (whole percent, rounded up).
-            let cpu_health =
-                CPUHealth::new(usage0_total.ceil_percent(), usage1_total.ceil_percent());
+            let cpu_health = CPUHealth::new_from_readings(
+                usage0_total.ceil_percent(),
+                usage1_total.ceil_percent(),
+            );
             SYSTEM_HEALTH.cpu_health.update(cpu_health);
+            let _ = LOG_CHANNEL.try_send(LogEntry::CPUHealth(cpu_health));
 
             // Per-task usage.
             let mut task_usages = [Percent(0); MAX_TASKS];

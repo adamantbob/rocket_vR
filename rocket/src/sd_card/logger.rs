@@ -290,6 +290,7 @@ where
 
                 let mut final_name = [0u8; MAX_NAME_LEN];
                 final_name.copy_from_slice(name_buffer.get_active_buffer());
+                local_info!("Created new log file: LOG_{:03}.CSV", file_num);
                 return (file, final_name);
             }
         }

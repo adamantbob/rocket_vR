@@ -1,6 +1,6 @@
-use crate::datacells::{DataCell, FlightState, PersistentData};
+use crate::datacells::{DataCell, FlightState, save_flight_data};
 use crate::{StateMachine, error, info};
-use embassy_time::{Duration, Instant, Ticker, Timer};
+use embassy_time::{Duration, Instant, Ticker};
 use heapless::Vec;
 use proc_macros::tracked_task;
 use rocket_core::{
@@ -33,7 +33,7 @@ pub static SYSTEM_HEALTH: SystemHealth = SystemHealth {
     gps_health: DataCell::new(GPSHealth::new()),
     wifi_health: DataCell::new(WifiHealth::new()),
     sd_health: DataCell::new(SDCardHealth::new()),
-    cpu_health: DataCell::new(CPUHealth::new(0, 0)),
+    cpu_health: DataCell::new(CPUHealth::new()),
 };
 
 // State Machine Task.
@@ -74,7 +74,7 @@ pub async fn state_machine_task() {
                     info!("Calibrating... {}/10", calibration_buffer.len());
                 }
                 // We still yield to the executor so other tasks (like GPS) can run
-                Timer::after_millis(50).await;
+                ticker.next().await;
             }
 
             let sum: i32 = calibration_buffer.iter().sum();
@@ -83,11 +83,10 @@ pub async fn state_machine_task() {
             info!("Calibration complete. Transitioned to GroundIdle.");
         }
         // After calibration is done, initialize the persistence
-        let initial_data = PersistentData {
-            ground_level: controller.ground_level_mm.unwrap(),
-            state: FlightState::GroundIdle,
-        };
-        crate::datacells::save_flight_data(initial_data);
+        crate::datacells::save_flight_data(
+            controller.ground_level_mm.unwrap(),
+            FlightState::GroundIdle,
+        );
     }
 
     // --- MAIN FLIGHT LOOP ---
@@ -118,11 +117,7 @@ pub async fn state_machine_task() {
             FlightAction::None => {}
         }
 
-        let current_data = PersistentData {
-            ground_level: controller.ground_level_mm.unwrap(),
-            state: controller.state,
-        };
-        crate::datacells::save_flight_data(current_data);
+        save_flight_data(controller.ground_level_mm.unwrap(), controller.state);
 
         // 3. Wait for the ticker
         ticker.next().await;

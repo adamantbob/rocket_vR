@@ -39,4 +39,5 @@ pub enum FlightAction {
 pub struct PersistentData {
     pub ground_level: i32,
     pub state: FlightState,
+    pub checksum: u32,
 }
