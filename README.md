@@ -103,6 +103,8 @@ cargo pico
     ```bash
     rustup target add thumbv8m.main-none-eabihf # For Pico 2
     rustup target add thumbv6m-none-eabi        # For Pico
+    cargo install elf2uf2-rs
+    cargo install probe-rs
     ```
 3.  **Picotool**: Required for loading the firmware.
 4.  **Firmware Files**: Ensure `43439A0.bin` and `43439A0_clm.bin` are present in `firmware/cyw43-firmware/`.

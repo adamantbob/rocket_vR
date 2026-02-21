@@ -171,7 +171,6 @@ where
             self.sd_ready = false;
             self.recover().await;
         } else {
-            local_info!("SD write successful ({} bytes)", self.buffer.pos);
             self.buffer.reset();
             self.last_flush = Instant::now();
         }
