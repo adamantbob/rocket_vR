@@ -1,17 +1,6 @@
 #![no_std]
 #![no_main]
 
-#[cfg(not(any(feature = "rp2040", feature = "rp2350")))]
-compile_error!(
-    "Please use a chip alias:\n  - For Pico (RP2040):   cargo run-pico\n  - For Pico 2 (RP2350): cargo run-pico2"
-);
-
-#[cfg(all(feature = "rp2040", not(target_arch = "arm")))]
-compile_error!("Mismatched target for RP2040! Please use 'cargo run-pico'");
-
-#[cfg(all(feature = "rp2350", not(target_arch = "arm")))]
-compile_error!("Mismatched target for RP2350! Please use 'cargo run-pico2'");
-
 use cortex_m_rt::entry;
 use defmt::unwrap;
 use defmt_rtt as _;
@@ -259,7 +248,7 @@ pub async fn init_low_prio_tasks(
             TASK_NAMES,
             TASK_CORES,
             Stats,
-            Some((stack_bottom, stack_top)),
+            (stack_bottom, stack_top),
         )));
     }
     spawner.spawn(unwrap!(blinky()));
