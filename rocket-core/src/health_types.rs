@@ -92,6 +92,7 @@ impl DeciPercent {
     }
 }
 
+#[cfg(feature = "defmt")]
 impl defmt::Format for DeciPercent {
     fn format(&self, fmt: defmt::Formatter) {
         defmt::write!(fmt, "{}.{}%", self.num / 10, self.num % 10)
