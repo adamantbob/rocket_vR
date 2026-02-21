@@ -140,11 +140,4 @@ The system features a **Bidirectional Cross-Core Panic Monitoring** system desig
 ## To-Do (Unprioritized)
 
 - Have 'cargo build' generate the uf2 file for manually loading onto the Pi
-- [x] Enable the multi-core
-- Move the USB Logger over to Core 1
-- [x] measure CPU consumption
-- [x] Implement robust bidirectional panic monitoring
-- Implement executor which allows specific ordering of tasks. i.e., always run the state machine task first in each poll loop, then the pyros, etc.
-- Design abstract base tasks for Input and Output Tasks. (Don't need one for State Machine since there only be the one)
-- Design the async CHANNELS in order to communicate between the tasks.
-- Design the flash log storage.
+- 

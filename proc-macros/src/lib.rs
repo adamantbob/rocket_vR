@@ -19,10 +19,8 @@ pub fn tracked_task(args: TokenStream, input: TokenStream) -> TokenStream {
     // We don't create a new async block, we just wrap the existing logic
     let new_block = quote! {
         {
-            use crate::utilization::TrackedExt;
-            // We use a dummy async block just to hook into the .tracked() trait
-            // then immediately await it so the function stays a single future.
-            async { #block }.tracked(#task_id_expr).await
+            use crate::health::utilization::TrackedExt;
+            TrackedExt::tracked(async { #block }, #task_id_expr).await
         }
     };
 

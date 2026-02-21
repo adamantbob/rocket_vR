@@ -1,6 +1,4 @@
-#[cfg(feature = "debug_imu")]
-use crate::log_triad_fixed_width;
-use crate::state_machine::SENSOR_DATA;
+use crate::state_machine::{SENSOR_DATA, SYSTEM_HEALTH};
 use crate::{IMU, IMUResources, Irqs, info};
 use embassy_embedded_hal::shared_bus::asynch::i2c::I2cDevice;
 use embassy_rp::gpio::{Level, Output};
@@ -174,7 +172,7 @@ pub async fn imu_task(r: IMUResources, irqs: Irqs) -> ! {
                 total_error_level,
                 utilization,
             );
-            SENSOR_DATA.imu_health.update(imu_error_level);
+            SYSTEM_HEALTH.imu_health.update(imu_error_level);
 
             // Reset metrics for the next second
             test_counter = 0;

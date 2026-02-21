@@ -51,6 +51,8 @@ where
             assert!(N >= 512, "SdLogger buffer size must be at least 512 bytes");
         }
         let v_idx = VolumeIdx(0);
+        // Intentional Delay to let the bus settle
+        Timer::after_millis(200).await;
         let v_handle = mgr.open_raw_volume(v_idx).map_err(|e| {
             error!("Failed to open volume: {:?}", defmt::Debug2Format(&e));
         })?;
@@ -288,6 +290,7 @@ where
 
                 let mut final_name = [0u8; MAX_NAME_LEN];
                 final_name.copy_from_slice(name_buffer.get_active_buffer());
+                local_info!("Created new log file: LOG_{:03}.CSV", file_num);
                 return (file, final_name);
             }
         }

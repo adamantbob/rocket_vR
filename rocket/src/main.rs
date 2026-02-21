@@ -1,17 +1,6 @@
 #![no_std]
 #![no_main]
 
-#[cfg(not(any(feature = "rp2040", feature = "rp2350")))]
-compile_error!(
-    "Please use a chip alias:\n  - For Pico (RP2040):   cargo run-pico\n  - For Pico 2 (RP2350): cargo run-pico2"
-);
-
-#[cfg(all(feature = "rp2040", not(target_arch = "arm")))]
-compile_error!("Mismatched target for RP2040! Please use 'cargo run-pico'");
-
-#[cfg(all(feature = "rp2350", not(target_arch = "arm")))]
-compile_error!("Mismatched target for RP2350! Please use 'cargo run-pico2'");
-
 use cortex_m_rt::entry;
 use defmt::unwrap;
 use defmt_rtt as _;
@@ -19,7 +8,7 @@ use embassy_executor::Spawner;
 use embassy_futures::join::join;
 use embassy_rp::interrupt::{InterruptExt, Priority};
 use embassy_rp::multicore::{Stack, spawn_core1};
-use embassy_rp::peripherals::{DMA_CH0, DMA_CH3, DMA_CH4, I2C0, PIO0, SPI0, UART0, USB};
+use embassy_rp::peripherals::{DMA_CH0, DMA_CH3, DMA_CH4, I2C0, PIO0, UART0, USB};
 use embassy_rp::usb::{Driver, Instance};
 use embassy_rp::{bind_interrupts, interrupt};
 use embassy_time::{Duration, Timer};
@@ -38,18 +27,18 @@ use instrumented_executor::{
 mod channels;
 mod datacells;
 mod gps;
+mod health;
 mod imu;
 mod macros;
 mod sd_card;
 mod state_machine;
 mod usb;
-mod utilization;
 mod wifi;
 
-pub use heapless;
 pub use rocket_core;
 
-use crate::utilization::{TrackedExt, stats_task};
+use crate::health::panic_monitor_task;
+use crate::health::utilization::{TrackedExt, stats_task};
 use crate::wifi::LedState;
 
 define_utilization_tasks!(
@@ -58,10 +47,12 @@ define_utilization_tasks!(
     Blinky[0],
     Repl[0],
     StateMachine[0],
-    InitLowPrioTasks[0],
+    USB[0],
     GPS[0],
     IMU[0],
-    SDCard[1]
+    PanicMonitor0[0],
+    SDCard[1],
+    PanicMonitor1[1]
 );
 
 assign_resources! {
@@ -136,7 +127,7 @@ bind_interrupts!(pub struct Irqs {
                  embassy_rp::dma::InterruptHandler<DMA_CH4>;
 });
 
-use panic::{PANIC_RECORDS, check_core_panic};
+use panic::check_core_panic;
 
 #[tracked_task(Blinky)]
 #[embassy_executor::task]
@@ -148,27 +139,6 @@ async fn blinky() -> ! {
         Timer::after(short_delay).await;
         LedState::Off.send().await;
         Timer::after(long_delay).await;
-    }
-}
-
-/// Dedicated task to monitor the "other" core for crashes.
-#[embassy_executor::task(pool_size = 2)]
-pub(crate) async fn panic_monitor_task(target_core: usize) -> ! {
-    loop {
-        if let Some(report) = check_core_panic(target_core) {
-            if report.message == "(Incomplete formatting)" {
-                error!("CORE {} PANIC DETECTED (Partial Sentinel)", target_core);
-            } else {
-                error!(
-                    "CORE {} PANIC DETECTED: {} at {}:{}",
-                    target_core,
-                    report.message.as_str(),
-                    report.file.as_str(),
-                    report.line
-                );
-            }
-        }
-        Timer::after_millis(500).await;
     }
 }
 
@@ -269,14 +239,25 @@ pub async fn init_low_prio_tasks(
     spawner.spawn(unwrap!(crate::imu::imu_task(imu, Irqs)));
 
     // 3. Start Application Level Tasks
-    spawner.spawn(unwrap!(stats_task(TASK_NAMES, TASK_CORES, Stats)));
+    unsafe {
+        let stack_ptr = core::ptr::addr_of_mut!(crate::CORE1_STACK);
+        let stack_bottom = stack_ptr as *const u32;
+        let stack_top = (stack_ptr as *const u8).add(16384 - 1024) as *const u32;
+
+        spawner.spawn(unwrap!(stats_task(
+            TASK_NAMES,
+            TASK_CORES,
+            Stats,
+            (stack_bottom, stack_top),
+        )));
+    }
     spawner.spawn(unwrap!(blinky()));
 
     // Target core 1 (the executor core)
     spawner.spawn(unwrap!(panic_monitor_task(1)));
 
     // Join the runners that need to stay alive for this core
-    join(usb_runner, core0_repl(&mut class)).await;
+    join(usb_runner.tracked(USB), core0_repl(&mut class)).await;
 }
 
 pub static METRICS_CORE0: instrumented_executor::ExecutorMetrics =
@@ -287,7 +268,9 @@ pub static METRICS_CORE1: instrumented_executor::ExecutorMetrics =
 static EXECUTOR_HIGH: StaticCell<InstrumentedInterruptExecutor> = StaticCell::new();
 static EXECUTOR_LOW: StaticCell<InstrumentedExecutor> = StaticCell::new();
 
-static mut CORE1_STACK: Stack<16384> = Stack::new();
+const CORE1_STACK_SIZE: usize = 16384;
+
+static mut CORE1_STACK: Stack<CORE1_STACK_SIZE> = Stack::new();
 static EXECUTOR_CORE1: StaticCell<InstrumentedExecutor> = StaticCell::new();
 
 #[interrupt]
@@ -310,15 +293,10 @@ fn main() -> ! {
     let r = AssignedResources::take(p);
 
     // High-priority executor: SWI_IRQ_1, priority level 2
-    local_info!("1");
     let exec_high = EXECUTOR_HIGH.init(InstrumentedInterruptExecutor::new());
-    local_info!("2");
     interrupt::SWI_IRQ_1.set_priority(Priority::P2);
-    local_info!("3");
     let spawner = exec_high.start(interrupt::SWI_IRQ_1);
-    local_info!("4");
     spawner.spawn(unwrap!(state_machine::state_machine_task()));
-    local_info!("5");
 
     // Spawn the SD Card task on Core 1.
     // The SD Card is blocking and the lowest priority, so it should run on a separate core.
@@ -326,6 +304,16 @@ fn main() -> ! {
         r.CoreResources.core1,
         unsafe { &mut *core::ptr::addr_of_mut!(CORE1_STACK) },
         move || {
+            // Paint the stack for absolute watermark tracking.
+            // Safety: We are at the very beginning of the core's execution context.
+            // Only core 1 is tracked for high water mark as core 0's stack
+            // is calculated for size.
+            unsafe {
+                health::stack::setup_core1_stack_high_watermark_tracking(
+                    &raw mut CORE1_STACK as *mut u32,
+                    CORE1_STACK_SIZE,
+                );
+            }
             let executor1 = EXECUTOR_CORE1.init(InstrumentedExecutor::new(&METRICS_CORE1));
             executor1.run(|spawner| {
                 spawner.spawn(unwrap!(crate::sd_card::sd_card_task(

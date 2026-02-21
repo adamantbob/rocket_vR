@@ -20,6 +20,8 @@ jobs:
         rustup target add thumbv8m.main-none-eabihf # For Pico 2
         rustup target add thumbv6m-none-eabi        # For Pico
     - uses: actions/checkout@v4
+    - name: Test Core
+      run: cargo test -p rocket-core
     - name: Build Pico2
       run: cargo build-pico2
     - name: Build Pico

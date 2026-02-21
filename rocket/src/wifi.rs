@@ -1,10 +1,13 @@
+use crate::state_machine::SYSTEM_HEALTH;
 use crate::{Irqs, WifiResources, info};
 use cyw43::aligned_bytes;
 use cyw43_pio::{PioSpi, RM2_CLOCK_DIVIDER};
 use embassy_futures::join::join;
 use embassy_rp::gpio::{Level, Output};
 use embassy_rp::pio::Pio;
+use embassy_time::Instant;
 use proc_macros::tracked_task;
+use rocket_core::WifiHealth;
 use static_cell::StaticCell;
 
 // Communication Channels
@@ -93,6 +96,10 @@ pub async fn wifi_task(r: WifiResources, irqs: Irqs) -> ! {
 
         // let mut led_on = false;
         loop {
+            SYSTEM_HEALTH.wifi_health.update(WifiHealth {
+                tickstamp: Instant::now().as_ticks() as u64,
+                initialized: true,
+            });
             // Wait for a message from the rest of the application.
             let state = LED_CHANNEL.receive().await;
 

@@ -1,5 +1,5 @@
-use crate::state_machine::SENSOR_DATA;
-use crate::{GPS, GPSResources, Irqs, local_info};
+use crate::state_machine::{SENSOR_DATA, SYSTEM_HEALTH};
+use crate::{GPS, GPSResources, Irqs};
 use defmt_rtt as _;
 use embassy_futures::select::{Either, select};
 use embassy_rp::uart::{BufferedUart, Config};
@@ -114,14 +114,14 @@ pub async fn gps_task(r: GPSResources, irqs: Irqs) -> ! {
                         // Immediate broadcast of failure status
                         SENSOR_DATA.gps.update(current_pos);
                         let _ = LOG_CHANNEL.try_send(LogEntry::Gps(current_pos));
-                        SENSOR_DATA.gps_health.update(gps_health);
+                        SYSTEM_HEALTH.gps_health.update(gps_health);
                     }
                 }
             }
             // BRANCH B: Periodic Update (1Hz)
             Either::Second(_) => {
                 // Periodically sync health metrics to the blackboard
-                SENSOR_DATA.gps_health.update(gps_health);
+                SYSTEM_HEALTH.gps_health.update(gps_health);
                 let _ = LOG_CHANNEL.try_send(LogEntry::GPSHealth(gps_health));
             }
         }

@@ -1,4 +1,4 @@
-use crate::{FlightTicks, GPSData, GPSHealth, IMUData, IMUHealth};
+use crate::{CPUHealth, FlightTicks, GPSData, GPSHealth, IMUData, IMUHealth};
 use core::fmt::Write;
 use core::sync::atomic::Ordering;
 use embassy_sync::blocking_mutex::raw::CriticalSectionRawMutex;
@@ -40,6 +40,7 @@ pub enum LogEntry {
     Event(&'static str),
     Log(LogLevel, heapless::String<32>),
     LoggerHealth(LoggerHealth),
+    CPUHealth(CPUHealth),
 }
 impl LogEntry {
     pub fn write_schema<const SIZE: usize>(cursor: &mut LogBuffer<SIZE>) -> core::fmt::Result {
@@ -77,6 +78,12 @@ impl LogEntry {
             LoggerHealth::TAG,
             LoggerHealth::CSV_HEADER
         )?;
+        writeln!(
+            cursor,
+            "# {},tickstamp,{}",
+            CPUHealth::TAG,
+            CPUHealth::CSV_HEADER
+        )?;
         Ok(())
     }
 
@@ -86,6 +93,8 @@ impl LogEntry {
             LogEntry::Gps(data) => self.write_line(data.tickstamp, data, cursor),
             LogEntry::IMUHealth(data) => self.write_line(data.tickstamp, data, cursor),
             LogEntry::GPSHealth(data) => self.write_line(data.tickstamp, data, cursor),
+            LogEntry::CPUHealth(data) => self.write_line(data.tickstamp, data, cursor),
+            LogEntry::LoggerHealth(data) => self.write_line(data.tickstamp, data, cursor),
             LogEntry::Event(data) => {
                 self.write_line(Instant::now().as_ticks() as u64, data, cursor)
             }
@@ -96,7 +105,6 @@ impl LogEntry {
                 write!(cursor, "\n")?;
                 Ok(())
             }
-            LogEntry::LoggerHealth(data) => self.write_line(data.tickstamp, data, cursor),
         }
     }
 
