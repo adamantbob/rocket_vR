@@ -6,6 +6,7 @@ pub mod gps;
 pub mod health_types;
 pub mod imu;
 pub mod log;
+pub mod radio_types;
 pub mod state_machine;
 pub mod types;
 

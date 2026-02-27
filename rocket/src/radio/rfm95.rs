@@ -49,7 +49,9 @@
 //! Hardware CRC is enabled on the RFM95, providing a second layer of error
 //! detection on top of postcard's own integrity checking.
 
+use defmt::error;
 use embassy_time::{Duration, Timer};
+use embedded_hal_1::digital::OutputPin;
 use embedded_hal_async::digital::Wait;
 use embedded_hal_async::spi::SpiDevice;
 use postcard::{from_bytes, to_slice};
@@ -194,6 +196,56 @@ impl Default for LoRaConfig {
 }
 
 // ---------------------------------------------------------------------------
+// Packet types
+// ---------------------------------------------------------------------------
+
+/// Telemetry packet transmitted from rocket to base station.
+///
+/// Both sides must use the same definition — postcard serialization is
+/// not self-describing, so field order and types must match exactly.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TelemetryPacket {
+    /// Timestamp in embassy ticks.
+    pub tickstamp: u64,
+    /// Altitude above ground in millimetres.
+    pub altitude_mm: i32,
+    /// Vertical velocity in mm/s (positive = ascending).
+    pub velocity_z_mms: i32,
+    /// Z-axis acceleration in milli-G.
+    pub accel_z_mg: i32,
+    /// GPS latitude in degrees * 1e7 (raw integer).
+    pub lat_raw: i32,
+    /// GPS longitude in degrees * 1e7 (raw integer).
+    pub lon_raw: i32,
+    /// Current flight state discriminant.
+    pub flight_state: u8,
+    /// Core 0 CPU utilization in tenths of a percent (1000 = 100.0%).
+    pub cpu0_utilization: u16,
+    /// Core 1 CPU utilization in tenths of a percent.
+    pub cpu1_utilization: u16,
+}
+
+/// Command packet transmitted from base station to rocket.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CommandPacket {
+    /// Sequence number for deduplication.
+    pub sequence: u16,
+    pub command: RocketCommand,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub enum RocketCommand {
+    /// No-op / keepalive ping.
+    Ping,
+    /// Arm the pyrotechnic channels.
+    Arm,
+    /// Manually trigger parachute deployment.
+    DeployParachutes,
+    /// Abort and safe all pyrotechnics.
+    Abort,
+}
+
+// ---------------------------------------------------------------------------
 // RSSI / SNR report
 // ---------------------------------------------------------------------------
 
@@ -256,7 +308,7 @@ pub struct Rfm95<SPI, RST, DIO0> {
 impl<SPI, RST, DIO0> Rfm95<SPI, RST, DIO0>
 where
     SPI: SpiDevice,
-    RST: embedded_hal::digital::OutputPin,
+    RST: OutputPin,
     DIO0: Wait,
 {
     /// Initialise the radio.
@@ -264,12 +316,35 @@ where
     /// Performs a hardware reset, verifies the chip version, applies the
     /// provided configuration, and leaves the radio in standby mode.
     ///
+    /// # GPIO Interrupt Binding (RP2040 only)
+    ///
+    /// On RP2040, Embassy's async GPIO requires `IO_IRQ_BANK0` to be explicitly
+    /// bound. On RP2350 this is handled internally by Embassy and no binding
+    /// is needed.
+    ///
+    /// When building for RP2040, pass your `Irqs` struct as the final argument.
+    /// The compiler will reject this call if the binding is missing:
+    ///
+    /// ```rust
+    /// // Required in your bind_interrupts! when targeting RP2040:
+    /// bind_interrupts!(struct Irqs {
+    ///     IO_IRQ_BANK0 => embassy_rp::gpio::InterruptHandler;
+    ///     // ... other interrupts ...
+    /// });
+    ///
+    /// // RP2040 (irqs argument required):
+    /// let radio = Rfm95::new(spi_dev, reset, dio0, config, Irqs).await?;
+    ///
+    /// // RP2350 (no irqs argument):
+    /// let radio = Rfm95::new(spi_dev, reset, dio0, config).await?;
+    /// ```
+    ///
     /// # Errors
     /// Returns [`RadioError::InvalidVersion`] if the VERSION register does not
     /// match the expected RFM95 value — most likely a wiring problem.
     pub async fn new(
         spi: SPI,
-        mut reset: RST,
+        reset: RST,
         dio0: DIO0,
         config: LoRaConfig,
     ) -> Result<Self, RadioError> {
@@ -280,15 +355,31 @@ where
             config,
         };
 
-        // Hardware reset: pull low for 10ms, release, wait 10ms for boot.
+        // Hardware reset sequence for RFM95 (Active-Low):
+        // 1. Start HIGH (Enables the chip)
+        // 2. Pulse LOW for 10ms (Resets the chip)
+        // 3. Return HIGH and wait 10ms (Stabilize)
+        radio.reset.set_high().ok();
+        Timer::after(Duration::from_millis(10)).await;
         radio.reset.set_low().ok();
         Timer::after(Duration::from_millis(10)).await;
         radio.reset.set_high().ok();
         Timer::after(Duration::from_millis(10)).await;
 
-        // Verify chip identity.
-        let version = radio.read_reg(regs::VERSION).await?;
-        if version != RFM95_VERSION {
+        // Verify chip identity — retry several times to distinguish a
+        // timing issue (first read too soon) from a wiring issue (all 0x00).
+        let mut version = 0u8;
+        let mut verified = false;
+        for _attempt in 0..5u8 {
+            version = radio.read_reg(regs::VERSION).await?;
+            if version == RFM95_VERSION {
+                verified = true;
+                break;
+            }
+            Timer::after(Duration::from_millis(10)).await;
+        }
+        if !verified {
+            error!("RFM95 VERSION check failed: 0x{:02X}", version);
             return Err(RadioError::InvalidVersion(version));
         }
 

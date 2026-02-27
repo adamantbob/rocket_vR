@@ -1,3 +1,5 @@
+use serde::{Deserialize, Serialize};
+
 /// Telemetry packet transmitted from rocket to base station.
 ///
 /// Both sides must use the same definition — postcard serialization is

@@ -1,11 +1,13 @@
+#[cfg(feature = "debug-imu")]
+use crate::log_triad_fixed_width;
 use crate::state_machine::{SENSOR_DATA, SYSTEM_HEALTH};
 use crate::{IMU, IMUResources, Irqs, info};
 use embassy_embedded_hal::shared_bus::asynch::i2c::I2cDevice;
-use embassy_rp::gpio::{Level, Output};
+use embassy_rp::gpio::{AnyPin, Input, Level, Output, Pull};
 use embassy_rp::i2c::{Async, I2c};
 use embassy_sync::blocking_mutex::raw::NoopRawMutex;
 use embassy_sync::mutex::Mutex;
-use embassy_time::{Duration, Instant, Ticker, with_timeout};
+use embassy_time::{Duration, Instant, Ticker, Timer, with_timeout};
 use proc_macros::tracked_task;
 use rocket_core::log::{LOG_CHANNEL, LogEntry};
 use static_cell::StaticCell;
@@ -16,6 +18,7 @@ mod lis3mdl;
 mod lism6dsox;
 use rocket_core::{IMUData, IMUHealth, IMUSensorError};
 
+/// Runs the IMU (Inertial Measurement Unit)
 #[tracked_task(IMU)]
 #[embassy_executor::task]
 pub async fn imu_task(r: IMUResources, irqs: Irqs) -> ! {
@@ -23,7 +26,32 @@ pub async fn imu_task(r: IMUResources, irqs: Irqs) -> ! {
     let mut config = embassy_rp::i2c::Config::default();
     config.frequency = 400_000; // Fast mode for 100Hz+ sampling
 
-    recover_bus(9, 8).await;
+    {
+        // Safety: We are "stealing" the pins temporarily for manual recovery.
+        // This is safe because we own the handles, and the recovery logic
+        // is synchronous and finishes before the real I2c driver takes over.
+        let mut scl = unsafe { Output::new(AnyPin::steal(5), Level::High) };
+        let sda = unsafe { Input::new(AnyPin::steal(4), Pull::Up) };
+
+        // If SDA is already high, the bus is fine
+        if sda.is_low() {
+            info!("I2C Bus hung low! Attempting recovery...");
+
+            // Clock the SCL line 9 times
+            for _ in 0..9 {
+                scl.set_low();
+                Timer::after_micros(5).await;
+                scl.set_high();
+                Timer::after_micros(5).await;
+
+                // If the sensor releases the line, we can stop
+                if sda.is_high() {
+                    info!("Bus recovered.");
+                    break;
+                }
+            }
+        }
+    }
     let mut i2c_bus = I2c::new_async(r.i2c, r.scl, r.sda, irqs, config);
 
     verify_bus(&mut i2c_bus).await;
@@ -150,7 +178,7 @@ pub async fn imu_task(r: IMUResources, irqs: Irqs) -> ! {
         // Every 1 second (100 ticks @ 100Hz), print the "Heartbeat"
 
         if test_counter >= 100 {
-            #[cfg(feature = "debug_imu")]
+            #[cfg(feature = "debug-imu")]
             {
                 info!(
                     "IMU Error Level: ADXL: {} | LSM: {} | MAG: {}",
@@ -228,39 +256,5 @@ async fn read_reg(
         Ok(Ok(_)) => Ok(read_buf[0]),
         Ok(Err(_)) => Err("I2C Error (NACK/Bus)"),
         Err(_) => Err("I2C Timeout (Bus Hung)"),
-    }
-}
-
-async fn recover_bus(scl_pin: u8, sda_pin: u8) {
-    // We use "any_pin" to temporarily take control of the pins
-    // This assumes you pass the pin numbers (e.g., 9 for SCL, 8 for SDA)
-    let mut scl = Output::new(
-        unsafe { embassy_rp::gpio::AnyPin::steal(scl_pin) },
-        Level::High,
-    );
-    let sda = embassy_rp::gpio::Input::new(
-        unsafe { embassy_rp::gpio::AnyPin::steal(sda_pin) },
-        embassy_rp::gpio::Pull::Up,
-    );
-
-    // If SDA is already high, the bus is fine
-    if sda.is_high() {
-        return;
-    }
-
-    info!("I2C Bus hung low! Attempting recovery...");
-
-    // Clock the SCL line 9 times
-    for _ in 0..9 {
-        scl.set_low();
-        embassy_time::Timer::after_micros(5).await;
-        scl.set_high();
-        embassy_time::Timer::after_micros(5).await;
-
-        // If the sensor releases the line, we can stop
-        if sda.is_high() {
-            info!("Bus recovered.");
-            break;
-        }
     }
 }
