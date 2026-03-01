@@ -1,6 +1,6 @@
 use proc_macro::TokenStream;
 use quote::quote;
-use syn::{Expr, ItemFn, parse_macro_input};
+use syn::{ItemFn, parse_macro_input};
 
 // A proc macro to wrap embassy tasks with defmt tracking
 // This is expected to be used with the utilization module
