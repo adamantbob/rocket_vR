@@ -6,7 +6,7 @@ default-run = "rocket_vR"
 
 [features]
 verbose-utilization = []
-debug_imu = []
+debug-imu = []
 rp2040 = ["embassy-rp/rp2040"]
 rp2350 = ["embassy-rp/rp235xa"]
 
@@ -19,7 +19,6 @@ embassy-executor = { git = "https://github.com/embassy-rs/embassy", features = [
     "executor-interrupt",
     "defmt",
 ] }
-embassy-hal-internal = { git = "https://github.com/embassy-rs/embassy" }
 embassy-sync = { git = "https://github.com/embassy-rs/embassy", features = [
     "defmt",
 ] }
@@ -58,7 +57,7 @@ fixed = "1.23.1"
 fixed-macro = "1.2"
 
 serde = { version = "1.0.203", default-features = false, features = ["derive"] }
-serde-json-core = "0.5.1"
+# serde-json-core = "0.5.1"
 
 assign-resources = { git = "https://github.com/adamgreig/assign-resources", rev = "bd22cb7a92031fb16f74a5da42469d466c33383e" }
 
@@ -87,6 +86,8 @@ log = "0.4"
 # with some Embassy executors. Stick to v0.8.0 for now.
 embedded-sdmmc = { version = "0.8.0", default-features = false }
 
+postcard = { version = "1", default-features = false }
+
 proc-macros = { path = "../proc-macros" }
 rocket-core = { path = "../rocket-core", features = ["defmt"] }
 
@@ -109,4 +110,3 @@ cortex-m = { version = "0.7.6", features = ["inline-asm"] }
 cortex-m-rt = "0.7.0"
 panic-probe = { version = "1.0.0", features = ["print-defmt"], optional = true }
 defmt-rtt = "1.0.0"
-critical-section = "1.2"

@@ -1,12 +1,18 @@
-[target.'cfg(all(target_arch = "arm", target_os = "none"))']
-runner = "probe-rs run --chip RP2350"
-# runner = "picotool load -u -v -x -t elf"
+[target.thumbv8m.main-none-eabihf]
+runner = "probe-rs run --chip RP235x"
+# runner = "elf2uf2-rs -d" # For building Click & Drag UF2 files
+
+[target.thumbv6m-none-eabi]
+runner = "picotool load -u -v -x -t elf"
+# runner = "elf2uf2-rs -d" # For building Click & Drag UF2 files
 
 [alias]
 run-pico = "run -p rocket_vR --target thumbv6m-none-eabi --features rp2040"
 run-pico2 = "run -p rocket_vR --target thumbv8m.main-none-eabihf --features rp2350"
 build-pico = "build -p rocket_vR --target thumbv6m-none-eabi --features rp2040"
 build-pico2 = "build -p rocket_vR --target thumbv8m.main-none-eabihf --features rp2350"
+uf2-pico = "run -p rocket_vR --target thumbv6m-none-eabi --features rp2040 --config target.thumbv6m-none-eabi.runner='elf2uf2-rs'"
+uf2-pico2 = "run -p rocket_vR --target thumbv8m.main-none-eabihf --features rp2350 --config target.thumbv8m.main-none-eabihf.runner='elf2uf2-rs'"
 
 [build]
 

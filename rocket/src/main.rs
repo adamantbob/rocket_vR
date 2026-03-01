@@ -8,7 +8,9 @@ use embassy_executor::Spawner;
 use embassy_futures::join::join;
 use embassy_rp::interrupt::{InterruptExt, Priority};
 use embassy_rp::multicore::{Stack, spawn_core1};
-use embassy_rp::peripherals::{DMA_CH0, DMA_CH3, DMA_CH4, I2C0, PIO0, UART0, USB};
+use embassy_rp::peripherals::{
+    DMA_CH0, DMA_CH3, DMA_CH4, DMA_CH5, DMA_CH6, I2C0, PIO0, UART0, USB,
+};
 use embassy_rp::usb::{Driver, Instance};
 use embassy_rp::{bind_interrupts, interrupt};
 use embassy_time::{Duration, Timer};
@@ -30,6 +32,7 @@ mod gps;
 mod health;
 mod imu;
 mod macros;
+mod radio;
 mod sd_card;
 mod state_machine;
 mod usb;
@@ -51,6 +54,7 @@ define_utilization_tasks!(
     GPS[0],
     IMU[0],
     PanicMonitor0[0],
+    Radio[0],
     SDCard[1],
     PanicMonitor1[1]
 );
@@ -76,8 +80,8 @@ assign_resources! {
     }
     IMUResources {
         i2c: I2C0,
-        scl: PIN_9,
-        sda: PIN_8,
+        scl: PIN_5,
+        sda: PIN_4,
     }
     SDCardResources {
         spi: SPI0,
@@ -90,6 +94,17 @@ assign_resources! {
     }
     CoreResources {
         core1: CORE1,
+    }
+    RadioResources {
+        spi: SPI1,
+        miso: PIN_8,
+        mosi: PIN_11,
+        clk: PIN_10,
+        cs: PIN_9,
+        reset: PIN_7,
+        dio0: PIN_6,
+        dma_tx: DMA_CH5,
+        dma_rx: DMA_CH6,
     }
 }
 
@@ -116,7 +131,6 @@ pub static PICOTOOL_ENTRIES: [embassy_rp::binary_info::EntryAddr; 4] = [
 ];
 
 // Bind Interrupts to their appropriate interrupt handler
-// Bind Interrupts to their appropriate interrupt handler
 bind_interrupts!(pub struct Irqs {
     PIO0_IRQ_0 => embassy_rp::pio::InterruptHandler<PIO0>;
     USBCTRL_IRQ => embassy_rp::usb::InterruptHandler<USB>;
@@ -124,7 +138,9 @@ bind_interrupts!(pub struct Irqs {
     I2C0_IRQ => embassy_rp::i2c::InterruptHandler<I2C0>;
     DMA_IRQ_0 => embassy_rp::dma::InterruptHandler<DMA_CH0>,
                  embassy_rp::dma::InterruptHandler<DMA_CH3>,
-                 embassy_rp::dma::InterruptHandler<DMA_CH4>;
+                 embassy_rp::dma::InterruptHandler<DMA_CH4>,
+                 embassy_rp::dma::InterruptHandler<DMA_CH5>,
+                 embassy_rp::dma::InterruptHandler<DMA_CH6>;
 });
 
 use panic::check_core_panic;
@@ -216,6 +232,7 @@ pub async fn init_low_prio_tasks(
     usb: USBResources,
     gps: GPSResources,
     imu: IMUResources,
+    radio: RadioResources,
 ) {
     // Check for previous panics on BOTH cores
     for core in 0..2 {
@@ -252,6 +269,8 @@ pub async fn init_low_prio_tasks(
         )));
     }
     spawner.spawn(unwrap!(blinky()));
+
+    spawner.spawn(unwrap!(radio::radio_task(radio, Irqs)));
 
     // Target core 1 (the executor core)
     spawner.spawn(unwrap!(panic_monitor_task(1)));
@@ -333,6 +352,7 @@ fn main() -> ! {
             r.USBResources,
             r.GPSResources,
             r.IMUResources,
+            r.RadioResources,
         )));
     });
 }
