@@ -43,7 +43,7 @@ impl LedState {
 ///
 /// Init takes about 1s but shouldn't bog down the cpu too much.
 /// ~7% cpu usage during init for 1s.
-pub async fn wifi_task(
+pub async fn wifi_task_driver(
     pwr: Output<'static>,
     spi: PioSpi<'static, embassy_rp::peripherals::PIO0, 0>,
 ) -> ! {

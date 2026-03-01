@@ -54,7 +54,7 @@ impl embedded_sdmmc::TimeSource for DummyTime {
 /// 1. Discovery at 400kHz for hardware compatibility.
 /// 2. Performance boost to 16MHz after successful discovery.
 /// 3. Continuous log processing and periodic maintenance.
-pub async fn sd_card_task(
+pub async fn sd_card_task_driver(
     mut spi: Spi<'static, embassy_rp::peripherals::SPI0, Async>,
     mut cs: Output<'static>,
 ) -> ! {

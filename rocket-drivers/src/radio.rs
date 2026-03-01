@@ -10,7 +10,7 @@ mod rfm95;
 use rfm95::*;
 
 /// Runs the RFM95 Radio
-pub async fn radio_task(
+pub async fn radio_task_driver(
     mut spi: Spi<'static, embassy_rp::peripherals::SPI1, Async>,
     mut cs: Output<'static>,
     reset: Output<'static>,

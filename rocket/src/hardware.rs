@@ -4,7 +4,10 @@ use embassy_rp::peripherals::*;
 use embassy_rp::pio::Pio;
 use embassy_rp::spi::{Async as SpiAsync, Config as SpiConfig, Spi};
 use embassy_rp::uart::{BufferedUart, Config as UartConfig};
+use embassy_rp::usb::Driver as UsbDriver;
 use embassy_rp::{bind_interrupts, dma, i2c, pio, uart, usb};
+use embassy_usb::UsbDevice;
+use embassy_usb::class::cdc_acm::CdcAcmClass;
 
 use cyw43_pio::{PioSpi, RM2_CLOCK_DIVIDER};
 use static_cell::StaticCell;
@@ -24,17 +27,56 @@ bind_interrupts!(pub struct Irqs {
 });
 
 assign_resources! {
-    GpsR { uart: UART0, tx: PIN_12, rx: PIN_13 }
-    WifiR { pwr: PIN_23, cs: PIN_25, dio: PIN_24, clk: PIN_29, pio: PIO0, dma: DMA_CH0 }
-    UsbR { usb: USB }
-    ImuR { i2c: I2C0, scl: PIN_5, sda: PIN_4 }
-    SdcardR { spi: SPI0, miso: PIN_16, mosi: PIN_19, clk: PIN_18, cs: PIN_17, dma_tx: DMA_CH3, dma_rx: DMA_CH4 }
-    CoreR { core1: CORE1 }
-    RadioR { spi: SPI1, miso: PIN_8, mosi: PIN_11, clk: PIN_10, cs: PIN_9, reset: PIN_7, dio0: PIN_6, dma_tx: DMA_CH5, dma_rx: DMA_CH6 }
+    GpsR {
+        uart: UART0,
+        tx: PIN_12,
+        rx: PIN_13
+    }
+    WifiR {
+        pwr: PIN_23,
+        cs: PIN_25,
+        dio: PIN_24,
+        clk: PIN_29,
+        pio: PIO0,
+        dma: DMA_CH0
+    }
+    UsbR {
+        usb: USB
+    }
+    ImuR {
+        i2c: I2C0,
+        scl: PIN_5,
+        sda: PIN_4
+    }
+    SdcardR {
+        spi: SPI0,
+        miso: PIN_16,
+        mosi: PIN_19,
+        clk: PIN_18,
+        cs: PIN_17,
+        dma_tx: DMA_CH3,
+        dma_rx: DMA_CH4
+    }
+    CoreR {
+        core1: CORE1
+    }
+    RadioR {
+        spi: SPI1,
+        miso: PIN_8,
+        mosi: PIN_11,
+        clk: PIN_10,
+        cs: PIN_9,
+        reset: PIN_7,
+        dio0: PIN_6,
+        dma_tx: DMA_CH5,
+        dma_rx: DMA_CH6
+    }
 }
 
 pub struct Hardware {
-    pub usb: embassy_rp::Peri<'static, USB>,
+    pub usb_device: &'static mut UsbDevice<'static, UsbDriver<'static, USB>>,
+    pub usb_logger_class: CdcAcmClass<'static, UsbDriver<'static, USB>>,
+    pub usb_class: CdcAcmClass<'static, UsbDriver<'static, USB>>,
     pub core1: embassy_rp::Peri<'static, CORE1>,
     pub gps_uart: BufferedUart,
     pub imu_i2c: I2c<'static, I2C0, I2cAsync>,
@@ -54,6 +96,11 @@ impl Hardware {
 
         // USB
         let usb = r.UsbR.usb.into();
+
+        // Setup USB
+        let usb_driver = UsbDriver::new(usb, Irqs);
+        let (mut usb_class, usb_logger_class, usb_device) =
+            rocket_drivers::usb::setup_usb(usb_driver);
 
         // Core 1
         let core1 = r.CoreR.core1.into();
@@ -124,7 +171,9 @@ impl Hardware {
         );
 
         Self {
-            usb,
+            usb_class,
+            usb_logger_class,
+            usb_device,
             core1,
             gps_uart,
             imu_i2c,

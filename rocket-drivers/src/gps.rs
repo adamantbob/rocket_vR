@@ -2,6 +2,7 @@ use embassy_futures::select::{Either, select};
 use embassy_rp::uart::BufferedUart;
 use embassy_time::{Duration, Instant, Ticker, Timer, with_timeout};
 use embedded_io_async::{Read, Write};
+use proc_macros::tracked_task;
 
 use rocket_core::blackboard::{SENSOR_DATA, SYSTEM_HEALTH};
 
@@ -16,6 +17,9 @@ use rocket_core::log::{LOG_CHANNEL, LogEntry};
 /// This task manages the UART lifecycle for the GPS sensor, handles NMEA sentence
 /// accumulation, executes Kalman filtering for vertical state estimation, and
 /// reports health metrics to the global `SENSOR_DATA` blackboard.
+/// Since the GPS task takes a BufferedUart it can be generic.
+#[tracked_task]
+#[embassy_executor::task]
 pub async fn gps_task(mut uart: BufferedUart) -> ! {
     // --- 1. Initialization & Memory Allocation ---
 

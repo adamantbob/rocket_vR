@@ -18,7 +18,17 @@ mod lism6dsox;
 use rocket_core::{IMUData, IMUHealth, IMUSensorError};
 
 /// Runs the IMU (Inertial Measurement Unit)
-pub async fn imu_task<I2C>(mut i2c_bus: I2c<'static, I2C, embassy_rp::i2c::Async>) -> !
+/// To use this define a task in main.rs that calls this function with the I2Cx peripheral.
+/// For example:
+/// ```rust
+/// #[embassy_executor::task]
+/// pub async fn imu_task(
+///     i2c: embassy_rp::i2c::I2c<'static, embassy_rp::peripherals::I2C0, embassy_rp::i2c::Async>,
+/// ) -> ! {
+///     imu_task_driver(i2c).await
+/// }
+/// ```
+pub async fn imu_task_driver<I2C>(mut i2c_bus: I2c<'static, I2C, embassy_rp::i2c::Async>) -> !
 where
     I2C: embassy_rp::i2c::Instance,
 {
