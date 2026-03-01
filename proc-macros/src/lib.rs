@@ -1,6 +1,6 @@
 use proc_macro::TokenStream;
 use quote::quote;
-use syn::{Expr, ItemFn, parse_macro_input};
+use syn::{ItemFn, parse_macro_input};
 
 // A proc macro to wrap embassy tasks with defmt tracking
 // This is expected to be used with the utilization module
@@ -8,19 +8,22 @@ use syn::{Expr, ItemFn, parse_macro_input};
 // Usage: #[tracked_task(TaskId::MyTask)]
 
 #[proc_macro_attribute]
-pub fn tracked_task(args: TokenStream, input: TokenStream) -> TokenStream {
+pub fn tracked_task(_args: TokenStream, input: TokenStream) -> TokenStream {
     let mut item_fn = parse_macro_input!(input as ItemFn);
-    let task_id_str = args.to_string();
-    let task_id_expr: Expr = syn::parse_str(&task_id_str).expect("Need a TaskId argument");
+
+    // 1. Inject 'utilization_id: TaskId' into the function arguments as the last parameter
+    let id_param: syn::FnArg = syn::parse_quote! {
+        utilization_id: ::rocket_core::utilization::TaskId
+    };
+    item_fn.sig.inputs.push(id_param);
 
     let block = &item_fn.block;
 
-    // Rewrite the block to track the execution of the existing code
-    // We don't create a new async block, we just wrap the existing logic
+    // 2. Rewrite the block to track the execution using the injected 'utilization_id'
     let new_block = quote! {
         {
-            use crate::health::utilization::TrackedExt;
-            TrackedExt::tracked(async { #block }, #task_id_expr).await
+            use ::rocket_core::utilization::TrackedExt;
+            TrackedExt::tracked(async { #block }, utilization_id).await
         }
     };
 

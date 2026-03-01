@@ -2,16 +2,7 @@
 // This file holds the source for the "library" of data coming from different sensors
 // Each cell represent one chunk of data that can be read together.
 
-pub use rocket_core::datacells::DataCell;
-
 pub use rocket_core::{FlightState, PersistentData};
-
-pub enum ErrorLevel {
-    NORMAL,
-    WARNING,
-    ERROR,
-    FATAL,
-}
 
 // In PersistentData or datacells.rs
 const BOOT_SIGNATURE_VALID: u32 = 0xDEADBEEF;

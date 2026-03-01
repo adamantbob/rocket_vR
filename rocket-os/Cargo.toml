@@ -1,0 +1,35 @@
+[package]
+name = "rocket-os"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+embassy-executor = { git = "https://github.com/embassy-rs/embassy", features = [
+    "executor-thread",
+    "executor-interrupt",
+    "defmt",
+] }
+embassy-time = { git = "https://github.com/embassy-rs/embassy", features = [
+    "defmt",
+] }
+portable-atomic = { version = "1.5", features = ["critical-section"] }
+cortex-m = { version = "0.7.6", features = ["inline-asm"] }
+defmt = "1.0.1"
+defmt-rtt = "0.4"
+static_cell = "2.1"
+proc-macros = { path = "../proc-macros" }
+rocket-core = { path = "../rocket-core", features = ["defmt"] }
+log = "0.4"
+heapless = "0.8"
+cortex-m-rt = "0.7.3"
+embassy-rp = { git = "https://github.com/embassy-rs/embassy", features = [
+    "defmt",
+    "unstable-pac",
+    "time-driver",
+    "critical-section-impl",
+] }
+
+[features]
+rp2040 = ["embassy-rp/rp2040"]
+rp2350 = ["embassy-rp/rp235xa"]
+verbose-utilization = []

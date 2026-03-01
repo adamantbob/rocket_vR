@@ -1,11 +1,12 @@
-use crate::state_machine::SYSTEM_HEALTH;
-use crate::{Irqs, SDCard, SDCardResources, error};
-use embassy_rp::gpio::{Level, Output};
-use embassy_rp::spi::Spi;
+use embassy_rp::gpio::Output;
+use embassy_rp::spi::{Async, Spi};
+
 use embassy_time::{Delay, Duration, Timer};
 use embedded_hal_bus::spi::ExclusiveDevice;
 use embedded_sdmmc::{SdCard, VolumeManager};
-use proc_macros::tracked_task;
+
+use rocket_core::blackboard::SYSTEM_HEALTH;
+use rocket_core::error;
 use static_cell::StaticCell;
 
 use embassy_futures::select::{Either, select};
@@ -18,7 +19,7 @@ const MAX_NAME_LEN: usize = 11;
 // Logger buffer size
 const LOG_BUFFER_SIZE: usize = 4096;
 // Initialization Speed for the SD Card
-const SD_INIT_BAUD_RATE: u32 = 400_000;
+
 // Operational Speed for the SD Card
 const SD_OP_BAUD_RATE: u32 = 16_000_000;
 // Flush interval for the SD Card
@@ -53,20 +54,12 @@ impl embedded_sdmmc::TimeSource for DummyTime {
 /// 1. Discovery at 400kHz for hardware compatibility.
 /// 2. Performance boost to 16MHz after successful discovery.
 /// 3. Continuous log processing and periodic maintenance.
-#[tracked_task(SDCard)]
-#[embassy_executor::task]
-pub async fn sd_card_task(r: SDCardResources, _irqs: Irqs) -> ! {
+pub async fn sd_card_task_driver(
+    mut spi: Spi<'static, embassy_rp::peripherals::SPI0, Async>,
+    mut cs: Output<'static>,
+) -> ! {
     static BUFFER: StaticCell<LogBuffer<LOG_BUFFER_SIZE>> = StaticCell::new();
     let buffer = BUFFER.init(LogBuffer::new());
-
-    // Phase 1: Setup SPI with DMA at discovery frequency (400kHz)
-    let mut config = embassy_rp::spi::Config::default();
-    config.frequency = SD_INIT_BAUD_RATE;
-
-    let mut spi = Spi::new(
-        r.spi, r.clk, r.mosi, r.miso, r.dma_tx, r.dma_rx, Irqs, config,
-    );
-    let mut cs = Output::new(r.cs, Level::High);
 
     // Phase 2: Discovery and initial volume check
     {

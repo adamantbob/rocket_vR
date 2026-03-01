@@ -1,21 +1,14 @@
 // src/imu/adxl375.rs
-use crate::info;
-use embassy_embedded_hal::shared_bus::asynch::i2c::I2cDevice;
-use embassy_rp::i2c::{Async, I2c as RpI2c};
-use embassy_rp::peripherals::I2C0;
-use embassy_sync::blocking_mutex::raw::NoopRawMutex;
 use embassy_time::{Duration, with_timeout};
-use rocket_core::IMUSensorError;
-
 use embedded_hal_async::i2c::I2c as AsyncI2c;
+use rocket_core::IMUSensorError;
+use rocket_core::info;
 
-type SharedI2c0 = I2cDevice<'static, NoopRawMutex, RpI2c<'static, I2C0, Async>>;
-
-pub struct Adxl375 {
-    i2c: SharedI2c0,
+pub struct Adxl375<I2C> {
+    i2c: I2C,
 }
 
-impl Adxl375 {
+impl<I2C: AsyncI2c> Adxl375<I2C> {
     const ADDR: u8 = 0x53;
     const DEVID: u8 = 0x00;
     const BW_RATE: u8 = 0x2C;
@@ -24,14 +17,15 @@ impl Adxl375 {
     const DATAX0: u8 = 0x32;
     const FIFO_CTL: u8 = 0x38;
 
-    pub fn new(i2c_dev: SharedI2c0) -> Self {
+    pub fn new(i2c_dev: I2C) -> Self {
         Self { i2c: i2c_dev }
     }
 
     pub async fn init(&mut self) -> Result<(), IMUSensorError> {
         // 1. Identity Check
         let mut id = [0u8; 1];
-        AsyncI2c::write_read(&mut self.i2c, Self::ADDR, &[Self::DEVID], &mut id)
+        self.i2c
+            .write_read(Self::ADDR, &[Self::DEVID], &mut id)
             .await
             .map_err(|_| IMUSensorError::BusError)?;
 
@@ -41,23 +35,27 @@ impl Adxl375 {
 
         // 2. Configure Format: +/- 200g, Full-Res
         // 0x0B = 0b00001011 (Full Res, +/- 200g)
-        AsyncI2c::write(&mut self.i2c, Self::ADDR, &[Self::DATA_FORMAT, 0x0B])
+        self.i2c
+            .write(Self::ADDR, &[Self::DATA_FORMAT, 0x0B])
             .await
             .map_err(|_| IMUSensorError::BusError)?;
 
         // 3. Configure Bandwidth/Rate: 800Hz ODR
-        AsyncI2c::write(&mut self.i2c, Self::ADDR, &[Self::BW_RATE, 0x0D])
+        self.i2c
+            .write(Self::ADDR, &[Self::BW_RATE, 0x0D])
             .await
             .map_err(|_| IMUSensorError::BusError)?;
 
         // 4. FIFO Setup (Optional but recommended): Stream Mode
         // 0x80 = Stream mode (keeps latest 32 samples)
-        AsyncI2c::write(&mut self.i2c, Self::ADDR, &[Self::FIFO_CTL, 0x80])
+        self.i2c
+            .write(Self::ADDR, &[Self::FIFO_CTL, 0x80])
             .await
             .map_err(|_| IMUSensorError::BusError)?;
 
         // 5. Start Measurement
-        AsyncI2c::write(&mut self.i2c, Self::ADDR, &[Self::POWER_CTL, 0x08])
+        self.i2c
+            .write(Self::ADDR, &[Self::POWER_CTL, 0x08])
             .await
             .map_err(|_| IMUSensorError::BusError)?;
 
@@ -75,7 +73,7 @@ impl Adxl375 {
         // 5ms is plenty of breathing room but fast enough to recover.
         let result = with_timeout(
             Duration::from_millis(5),
-            AsyncI2c::write_read(&mut self.i2c, Self::ADDR, &[Self::DATAX0], &mut buf),
+            self.i2c.write_read(Self::ADDR, &[Self::DATAX0], &mut buf),
         )
         .await;
 

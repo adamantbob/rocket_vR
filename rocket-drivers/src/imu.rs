@@ -1,16 +1,15 @@
-#[cfg(feature = "debug-imu")]
-use crate::log_triad_fixed_width;
-use crate::state_machine::{SENSOR_DATA, SYSTEM_HEALTH};
-use crate::{IMU, IMUResources, Irqs, info};
 use embassy_embedded_hal::shared_bus::asynch::i2c::I2cDevice;
-use embassy_rp::gpio::{AnyPin, Input, Level, Output, Pull};
 use embassy_rp::i2c::{Async, I2c};
 use embassy_sync::blocking_mutex::raw::NoopRawMutex;
 use embassy_sync::mutex::Mutex;
-use embassy_time::{Duration, Instant, Ticker, Timer, with_timeout};
-use proc_macros::tracked_task;
+use embassy_time::{Duration, Instant, Ticker, with_timeout};
+
+use rocket_core::blackboard::{SENSOR_DATA, SYSTEM_HEALTH};
+use rocket_core::info;
 use rocket_core::log::{LOG_CHANNEL, LogEntry};
-use static_cell::StaticCell;
+
+#[cfg(feature = "debug-imu")]
+use rocket_core::log_triad_fixed_width;
 
 // Sensors
 mod adxl375;
@@ -19,56 +18,31 @@ mod lism6dsox;
 use rocket_core::{IMUData, IMUHealth, IMUSensorError};
 
 /// Runs the IMU (Inertial Measurement Unit)
-#[tracked_task(IMU)]
-#[embassy_executor::task]
-pub async fn imu_task(r: IMUResources, irqs: Irqs) -> ! {
-    // 1. Initialize the physical I2C peripheral
-    let mut config = embassy_rp::i2c::Config::default();
-    config.frequency = 400_000; // Fast mode for 100Hz+ sampling
-
-    {
-        // Safety: We are "stealing" the pins temporarily for manual recovery.
-        // This is safe because we own the handles, and the recovery logic
-        // is synchronous and finishes before the real I2c driver takes over.
-        let mut scl = unsafe { Output::new(AnyPin::steal(5), Level::High) };
-        let sda = unsafe { Input::new(AnyPin::steal(4), Pull::Up) };
-
-        // If SDA is already high, the bus is fine
-        if sda.is_low() {
-            info!("I2C Bus hung low! Attempting recovery...");
-
-            // Clock the SCL line 9 times
-            for _ in 0..9 {
-                scl.set_low();
-                Timer::after_micros(5).await;
-                scl.set_high();
-                Timer::after_micros(5).await;
-
-                // If the sensor releases the line, we can stop
-                if sda.is_high() {
-                    info!("Bus recovered.");
-                    break;
-                }
-            }
-        }
-    }
-    let mut i2c_bus = I2c::new_async(r.i2c, r.scl, r.sda, irqs, config);
-
+/// To use this define a task in main.rs that calls this function with the I2Cx peripheral.
+/// For example:
+/// ```rust
+/// #[embassy_executor::task]
+/// pub async fn imu_task(
+///     i2c: embassy_rp::i2c::I2c<'static, embassy_rp::peripherals::I2C0, embassy_rp::i2c::Async>,
+/// ) -> ! {
+///     imu_task_driver(i2c).await
+/// }
+/// ```
+pub async fn imu_task_driver<I2C>(mut i2c_bus: I2c<'static, I2C, embassy_rp::i2c::Async>) -> !
+where
+    I2C: embassy_rp::i2c::Instance,
+{
     verify_bus(&mut i2c_bus).await;
 
-    // 2. Wrap the bus in a Mutex to allow sharing
-    static I2C_BUS: StaticCell<
-        Mutex<NoopRawMutex, I2c<'static, embassy_rp::peripherals::I2C0, Async>>,
-    > = StaticCell::new();
-    let i2c_mutex = Mutex::new(i2c_bus);
-    let i2c_mutex_ref = I2C_BUS.init(i2c_mutex);
+    // 2. Wrap the bus in a stack Mutex to allow sharing
+    let i2c_mutex = Mutex::<NoopRawMutex, _>::new(i2c_bus);
 
     // 3. Create individual "handles" for each sensor
-    let lsm_dev = I2cDevice::new(i2c_mutex_ref);
+    let lsm_dev = I2cDevice::new(&i2c_mutex);
     let mut lsm = lism6dsox::Lsm6dsox::new(lsm_dev);
-    let adxl_dev = I2cDevice::new(i2c_mutex_ref);
+    let adxl_dev = I2cDevice::new(&i2c_mutex);
     let mut adxl = adxl375::Adxl375::new(adxl_dev);
-    let mag_dev = I2cDevice::new(i2c_mutex_ref);
+    let mag_dev = I2cDevice::new(&i2c_mutex);
     let mut mag = lis3mdl::Lis3mdl::new(mag_dev);
 
     // Track "Health" metrics
@@ -211,7 +185,10 @@ pub async fn imu_task(r: IMUResources, irqs: Irqs) -> ! {
     }
 }
 
-async fn verify_bus(i2c: &mut I2c<'_, embassy_rp::peripherals::I2C0, Async>) {
+async fn verify_bus<I2C>(i2c: &mut I2c<'_, I2C, Async>)
+where
+    I2C: embassy_rp::i2c::Instance,
+{
     info!("Starting I2C Sensor Discovery on I2C0...");
 
     // 1. Check LSM6DSOX (Addr: 0x6A or 0x6B)
@@ -239,11 +216,10 @@ async fn verify_bus(i2c: &mut I2c<'_, embassy_rp::peripherals::I2C0, Async>) {
     }
 }
 
-async fn read_reg(
-    i2c: &mut I2c<'_, embassy_rp::peripherals::I2C0, Async>,
-    addr: u8,
-    reg: u8,
-) -> Result<u8, &'static str> {
+async fn read_reg<I2C>(i2c: &mut I2c<'_, I2C, Async>, addr: u8, reg: u8) -> Result<u8, &'static str>
+where
+    I2C: embassy_rp::i2c::Instance,
+{
     let mut read_buf = [0u8; 1];
 
     // Wrap the I2C operation in a 50ms timeout

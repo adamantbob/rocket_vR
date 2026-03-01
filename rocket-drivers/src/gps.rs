@@ -1,12 +1,10 @@
-use crate::state_machine::{SENSOR_DATA, SYSTEM_HEALTH};
-use crate::{GPS, GPSResources, Irqs};
-use defmt_rtt as _;
 use embassy_futures::select::{Either, select};
-use embassy_rp::uart::{BufferedUart, Config};
+use embassy_rp::uart::BufferedUart;
 use embassy_time::{Duration, Instant, Ticker, Timer, with_timeout};
 use embedded_io_async::{Read, Write};
 use proc_macros::tracked_task;
-use static_cell::StaticCell;
+
+use rocket_core::blackboard::{SENSOR_DATA, SYSTEM_HEALTH};
 
 use rocket_core::gps::{
     GPSData, GPSHealth, VerticalKalman,
@@ -19,25 +17,11 @@ use rocket_core::log::{LOG_CHANNEL, LogEntry};
 /// This task manages the UART lifecycle for the GPS sensor, handles NMEA sentence
 /// accumulation, executes Kalman filtering for vertical state estimation, and
 /// reports health metrics to the global `SENSOR_DATA` blackboard.
-#[tracked_task(GPS)]
+/// Since the GPS task takes a BufferedUart it can be generic.
+#[tracked_task]
 #[embassy_executor::task]
-pub async fn gps_task(r: GPSResources, irqs: Irqs) -> ! {
+pub async fn gps_task(mut uart: BufferedUart) -> ! {
     // --- 1. Initialization & Memory Allocation ---
-
-    // SAFETY: We use StaticCells to ensure UART buffers live for the duration of
-    // the program without being stored on the task stack (which is limited).
-    static TX_BUF: StaticCell<[u8; 64]> = StaticCell::new();
-    static RX_BUF: StaticCell<[u8; 256]> = StaticCell::new();
-
-    let mut uart = BufferedUart::new(
-        r.uart,
-        r.tx,
-        r.rx,
-        irqs,
-        TX_BUF.init([0; 64]),
-        RX_BUF.init([0; 256]),
-        Config::default(),
-    );
 
     // Initial handshake: Negotiate baudrate (9600 -> 115200) and update rate (1Hz -> 10Hz)
     upgrade_link(&mut uart).await;

@@ -1,40 +1,9 @@
-use crate::datacells::{DataCell, FlightState, save_flight_data};
-use crate::{StateMachine, error, info};
+use crate::datacells::{FlightState, save_flight_data};
 use embassy_time::{Duration, Instant, Ticker};
 use heapless::Vec;
 use proc_macros::tracked_task;
-use rocket_core::{
-    CPUHealth, FlightAction, FlightController, GPSData, GPSHealth, IMUData, IMUHealth,
-    SDCardHealth, WifiHealth,
-};
-
-/// The Global Blackboard for Sensor Data
-pub struct SensorData {
-    pub gps: DataCell<GPSData>,
-    pub imu: DataCell<IMUData>,
-}
-
-/// The Global Blackboard for System Health and Diagnostics
-pub struct SystemHealth {
-    pub imu_health: DataCell<IMUHealth>,
-    pub gps_health: DataCell<GPSHealth>,
-    pub wifi_health: DataCell<WifiHealth>,
-    pub sd_health: DataCell<SDCardHealth>,
-    pub cpu_health: DataCell<CPUHealth>,
-}
-
-pub static SENSOR_DATA: SensorData = SensorData {
-    imu: DataCell::new(IMUData::new()),
-    gps: DataCell::new(GPSData::new()),
-};
-
-pub static SYSTEM_HEALTH: SystemHealth = SystemHealth {
-    imu_health: DataCell::new(IMUHealth::new()),
-    gps_health: DataCell::new(GPSHealth::new()),
-    wifi_health: DataCell::new(WifiHealth::new()),
-    sd_health: DataCell::new(SDCardHealth::new()),
-    cpu_health: DataCell::new(CPUHealth::new()),
-};
+use rocket_core::blackboard::SENSOR_DATA;
+use rocket_core::{FlightAction, FlightController, error, info};
 
 // State Machine Task.
 // This task is designed to run at a higher priority and preempt other tasks

@@ -2,150 +2,52 @@
 #![no_main]
 
 use cortex_m_rt::entry;
-use defmt::unwrap;
 use defmt_rtt as _;
-use embassy_executor::Spawner;
-use embassy_futures::join::join;
+use embassy_rp::interrupt;
 use embassy_rp::interrupt::{InterruptExt, Priority};
 use embassy_rp::multicore::{Stack, spawn_core1};
-use embassy_rp::peripherals::{
-    DMA_CH0, DMA_CH3, DMA_CH4, DMA_CH5, DMA_CH6, I2C0, PIO0, UART0, USB,
-};
-use embassy_rp::usb::{Driver, Instance};
-use embassy_rp::{bind_interrupts, interrupt};
 use embassy_time::{Duration, Timer};
-use embassy_usb::class::cdc_acm::CdcAcmClass;
-use heapless::Vec;
 use proc_macros::tracked_task;
 use static_cell::StaticCell;
 
-mod panic;
+pub mod hardware;
 
-mod instrumented_executor;
-use instrumented_executor::{
-    INTERRUPT_EX_PTR, InstrumentedExecutor, InstrumentedInterruptExecutor,
+use rocket_drivers::{
+    LedState, gps_task, imu_task_driver, radio_task_driver, sd_card_task_driver, usb_and_repl_task,
+    wifi_task_driver,
 };
-
-mod channels;
-mod datacells;
-mod gps;
-mod health;
-mod imu;
-mod macros;
-mod radio;
-mod sd_card;
-mod state_machine;
-mod usb;
-mod wifi;
+use rocket_os::{INTERRUPT_EX_PTR, InstrumentedExecutor, InstrumentedInterruptExecutor};
 
 pub use rocket_core;
+use rocket_core::{define_utilization_tasks, error, spawn_tracked};
+pub use rocket_drivers;
+use rocket_os::health::panic_monitor_task;
+use rocket_os::health::utilization::stats_task;
 
-use crate::health::panic_monitor_task;
-use crate::health::utilization::{TrackedExt, stats_task};
-use crate::wifi::LedState;
+mod datacells;
+mod state_machine;
+use state_machine::state_machine_task;
+
+pub use rocket_core::utilization::{METRICS_CORE0, METRICS_CORE1};
 
 define_utilization_tasks!(
-    Stats[0],
-    Wifi[0],
-    Blinky[0],
-    Repl[0],
-    StateMachine[0],
+    STATS[0],
+    WIFI[0],
+    BLINKY[0],
+    REPL[0],
+    STATE_MACHINE[0],
     USB[0],
     GPS[0],
     IMU[0],
-    PanicMonitor0[0],
-    Radio[0],
-    SDCard[1],
-    PanicMonitor1[1]
+    PANIC_MONITOR0[0],
+    RADIO[0],
+    SDCARD[1],
+    PANIC_MONITOR1[1]
 );
 
-assign_resources! {
-    GPSResources {
-        uart: UART0,
-        tx: PIN_12,
-        rx: PIN_13,
-        dma_tx: DMA_CH1,
-        dma_rx: DMA_CH2,
-    }
-    WifiResources {
-        pwr: PIN_23,
-        cs: PIN_25,
-        dio: PIN_24,
-        clk: PIN_29,
-        pio: PIO0,
-        dma: DMA_CH0,
-    }
-    USBResources {
-        usb: USB,
-    }
-    IMUResources {
-        i2c: I2C0,
-        scl: PIN_5,
-        sda: PIN_4,
-    }
-    SDCardResources {
-        spi: SPI0,
-        miso: PIN_16,
-        mosi: PIN_19,
-        clk: PIN_18,
-        cs: PIN_17,
-        dma_tx: DMA_CH3,
-        dma_rx: DMA_CH4,
-    }
-    CoreResources {
-        core1: CORE1,
-    }
-    RadioResources {
-        spi: SPI1,
-        miso: PIN_8,
-        mosi: PIN_11,
-        clk: PIN_10,
-        cs: PIN_9,
-        reset: PIN_7,
-        dio0: PIN_6,
-        dma_tx: DMA_CH5,
-        dma_rx: DMA_CH6,
-    }
-}
+use rocket_os::panic::check_core_panic;
 
-#[cfg(feature = "rp2350")]
-const DESCRIPTION: embassy_rp::binary_info::EntryAddr = embassy_rp::binary_info::rp_program_description!(
-    c"This example tests the RP Pico 2 W's onboard LED, connected to GPIO 0 of the cyw43 \
-    (WiFi chip) via PIO 0 over the SPI bus."
-);
-#[cfg(feature = "rp2040")]
-const DESCRIPTION: embassy_rp::binary_info::EntryAddr = embassy_rp::binary_info::rp_program_description!(
-    c"This example tests the RP Pico W's onboard LED, connected to GPIO 0 of the cyw43 \
-    (WiFi chip) via PIO 0 over the SPI bus."
-);
-
-// Program metadata for `picotool info`.
-// This isn't needed, but it's recommended to have these minimal entries.
-#[unsafe(link_section = ".bi_entries")]
-#[used]
-pub static PICOTOOL_ENTRIES: [embassy_rp::binary_info::EntryAddr; 4] = [
-    embassy_rp::binary_info::rp_program_name!(c"Rocket vR"),
-    DESCRIPTION,
-    embassy_rp::binary_info::rp_cargo_version!(),
-    embassy_rp::binary_info::rp_program_build_attribute!(),
-];
-
-// Bind Interrupts to their appropriate interrupt handler
-bind_interrupts!(pub struct Irqs {
-    PIO0_IRQ_0 => embassy_rp::pio::InterruptHandler<PIO0>;
-    USBCTRL_IRQ => embassy_rp::usb::InterruptHandler<USB>;
-    UART0_IRQ => embassy_rp::uart::BufferedInterruptHandler<UART0>;
-    I2C0_IRQ => embassy_rp::i2c::InterruptHandler<I2C0>;
-    DMA_IRQ_0 => embassy_rp::dma::InterruptHandler<DMA_CH0>,
-                 embassy_rp::dma::InterruptHandler<DMA_CH3>,
-                 embassy_rp::dma::InterruptHandler<DMA_CH4>,
-                 embassy_rp::dma::InterruptHandler<DMA_CH5>,
-                 embassy_rp::dma::InterruptHandler<DMA_CH6>;
-});
-
-use panic::check_core_panic;
-
-#[tracked_task(Blinky)]
+#[tracked_task]
 #[embassy_executor::task]
 async fn blinky() -> ! {
     let short_delay = Duration::from_millis(100);
@@ -157,132 +59,6 @@ async fn blinky() -> ! {
         Timer::after(long_delay).await;
     }
 }
-
-async fn core0_repl<'d, T: Instance + 'd>(serial: &mut CdcAcmClass<'d, Driver<'d, T>>) -> ! {
-    async move {
-        loop {
-            serial.wait_connection().await;
-            info!("Command REPL Connected");
-            let _ = run_repl(serial).await;
-            info!("Command REPL Disconnected");
-        }
-    }
-    .tracked(Repl)
-    .await
-}
-
-// Run the Command REPL.
-// Returns when the connection is lost.
-// By separating the inner logic out, the Disconnected Error can be handled in the main loop.
-async fn run_repl<'d, T: Instance + 'd>(
-    class: &mut CdcAcmClass<'d, Driver<'d, T>>,
-) -> Result<(), usb::Disconnected> {
-    const RX_BUF_SIZE: usize = 64;
-    const COMMAND_BUF_SIZE: usize = 64;
-    const _: () = assert!(
-        COMMAND_BUF_SIZE >= RX_BUF_SIZE,
-        "REPL command buffer must be at least as large as the receive buffer!"
-    );
-
-    let mut rx_buf = [0; RX_BUF_SIZE];
-    let mut command_buf = Vec::<u8, COMMAND_BUF_SIZE>::new();
-    const BACKSPACE: u8 = 0x08; // \b
-    loop {
-        let n = class.read_packet(&mut rx_buf).await?;
-
-        for &b in &rx_buf[..n] {
-            if b == b'\n' || b == b'\r' {
-                if !command_buf.is_empty() {
-                    if let Ok(s) = core::str::from_utf8(command_buf.as_slice()) {
-                        info!("command: {}", s);
-                    } else {
-                        info!("command (raw): {:?}", command_buf);
-                    }
-                    // echo the command back to the client
-                    class.write_packet(b"\r\n").await?;
-                    class.write_packet(command_buf.as_slice()).await?;
-                    class.write_packet(b" received\r\n").await?;
-                    command_buf.clear();
-                }
-            } else if b == BACKSPACE {
-                command_buf.pop();
-            } else if command_buf.extend_from_slice(&[b]).is_err() {
-                error!("command_buf overflow");
-                class.write_packet(b"command_buf overflow\n\r").await?;
-                command_buf.clear();
-            }
-        }
-        // echo the received data back to the client (this is so it appears on the terminal)
-        class.write_packet(&rx_buf[..n]).await?;
-    }
-}
-
-/* Init Tasks */
-// These tasks are designed to start up, spawn all the tasks then return.
-// This allows for a clean separation of concerns and makes it easier to reason about the code.
-
-/// Spawns all low priority tasks.
-/// Start each init and move on as we wait for init.
-/// Critical tasks have their own state and will report their status via the
-/// global task status channel.
-#[embassy_executor::task]
-pub async fn init_low_prio_tasks(
-    spawner: Spawner,
-    wifi: WifiResources,
-    usb: USBResources,
-    gps: GPSResources,
-    imu: IMUResources,
-    radio: RadioResources,
-) {
-    // Check for previous panics on BOTH cores
-    for core in 0..2 {
-        if let Some(report) = check_core_panic(core) {
-            error!(
-                "PREVIOUS PANIC DETECTED on Core {}: {} at {}:{}",
-                core,
-                report.message.as_str(),
-                report.file.as_str(),
-                report.line
-            );
-        }
-    }
-
-    // 1. Initialize USB: It returns a class and a future to run.
-    let (mut class, usb_runner) = usb::setup_usb(usb.usb);
-
-    // 2. Spawn Hardware Tasks
-    spawner.spawn(unwrap!(crate::wifi::wifi_task(wifi, Irqs)));
-    spawner.spawn(unwrap!(crate::gps::gps_task(gps, Irqs)));
-    spawner.spawn(unwrap!(crate::imu::imu_task(imu, Irqs)));
-
-    // 3. Start Application Level Tasks
-    unsafe {
-        let stack_ptr = core::ptr::addr_of_mut!(crate::CORE1_STACK);
-        let stack_bottom = stack_ptr as *const u32;
-        let stack_top = (stack_ptr as *const u8).add(16384 - 1024) as *const u32;
-
-        spawner.spawn(unwrap!(stats_task(
-            TASK_NAMES,
-            TASK_CORES,
-            Stats,
-            (stack_bottom, stack_top),
-        )));
-    }
-    spawner.spawn(unwrap!(blinky()));
-
-    spawner.spawn(unwrap!(radio::radio_task(radio, Irqs)));
-
-    // Target core 1 (the executor core)
-    spawner.spawn(unwrap!(panic_monitor_task(1)));
-
-    // Join the runners that need to stay alive for this core
-    join(usb_runner.tracked(USB), core0_repl(&mut class)).await;
-}
-
-pub static METRICS_CORE0: instrumented_executor::ExecutorMetrics =
-    instrumented_executor::ExecutorMetrics::new();
-pub static METRICS_CORE1: instrumented_executor::ExecutorMetrics =
-    instrumented_executor::ExecutorMetrics::new();
 
 static EXECUTOR_HIGH: StaticCell<InstrumentedInterruptExecutor> = StaticCell::new();
 static EXECUTOR_LOW: StaticCell<InstrumentedExecutor> = StaticCell::new();
@@ -309,18 +85,18 @@ unsafe fn SWI_IRQ_1() {
 #[entry]
 fn main() -> ! {
     let p = embassy_rp::init(Default::default());
-    let r = AssignedResources::take(p);
+    let hw = hardware::Hardware::init(p);
 
     // High-priority executor: SWI_IRQ_1, priority level 2
     let exec_high = EXECUTOR_HIGH.init(InstrumentedInterruptExecutor::new());
     interrupt::SWI_IRQ_1.set_priority(Priority::P2);
     let spawner = exec_high.start(interrupt::SWI_IRQ_1);
-    spawner.spawn(unwrap!(state_machine::state_machine_task()));
+    spawn_tracked!(spawner, STATE_MACHINE, state_machine_task());
 
     // Spawn the SD Card task on Core 1.
     // The SD Card is blocking and the lowest priority, so it should run on a separate core.
     spawn_core1(
-        r.CoreResources.core1,
+        hw.core1,
         unsafe { &mut *core::ptr::addr_of_mut!(CORE1_STACK) },
         move || {
             // Paint the stack for absolute watermark tracking.
@@ -328,31 +104,101 @@ fn main() -> ! {
             // Only core 1 is tracked for high water mark as core 0's stack
             // is calculated for size.
             unsafe {
-                health::stack::setup_core1_stack_high_watermark_tracking(
+                rocket_os::health::stack::setup_core1_stack_high_watermark_tracking(
                     &raw mut CORE1_STACK as *mut u32,
                     CORE1_STACK_SIZE,
                 );
             }
             let executor1 = EXECUTOR_CORE1.init(InstrumentedExecutor::new(&METRICS_CORE1));
             executor1.run(|spawner| {
-                spawner.spawn(unwrap!(crate::sd_card::sd_card_task(
-                    r.SDCardResources,
-                    Irqs
-                )));
-                spawner.spawn(unwrap!(panic_monitor_task(0)));
+                spawn_tracked!(spawner, SDCARD, sd_card_task(hw.sd_spi, hw.sd_cs));
+                spawn_tracked!(spawner, PANIC_MONITOR0, panic_monitor_task(0));
             });
         },
     );
 
     let executor0 = EXECUTOR_LOW.init(InstrumentedExecutor::new(&METRICS_CORE0));
     executor0.run(|spawner| {
-        spawner.spawn(unwrap!(init_low_prio_tasks(
+        // Check for previous panics on BOTH cores
+        for core in 0..2 {
+            if let Some(report) = check_core_panic(core) {
+                error!(
+                    "PREVIOUS PANIC DETECTED on Core {}: {} at {}:{}",
+                    core,
+                    report.message.as_str(),
+                    report.file.as_str(),
+                    report.line
+                );
+            }
+        }
+        // Spawn the stats task on Core 0.
+        unsafe {
+            let stack_ptr = core::ptr::addr_of_mut!(crate::CORE1_STACK);
+            let stack_bottom = stack_ptr as *const u32;
+            let stack_top = (stack_ptr as *const u8).add(CORE1_STACK_SIZE - 1024) as *const u32;
+
+            spawner.spawn(
+                stats_task(TASK_NAMES, TASK_CORES, STATS, (stack_bottom, stack_top)).unwrap(),
+            );
+        }
+        // Target core 1 (the executor core)
+        spawn_tracked!(spawner, PANIC_MONITOR1, panic_monitor_task(1));
+
+        // Spawn everything directly using the hw struct
+        spawn_tracked!(spawner, WIFI, wifi_task(hw.wifi_pwr, hw.wifi_spi));
+        spawn_tracked!(spawner, GPS, gps_task(hw.gps_uart));
+        spawn_tracked!(spawner, IMU, imu_task(hw.imu_i2c));
+        spawn_tracked!(
             spawner,
-            r.WifiResources,
-            r.USBResources,
-            r.GPSResources,
-            r.IMUResources,
-            r.RadioResources,
-        )));
+            RADIO,
+            radio_task(hw.radio_spi, hw.radio_cs, hw.radio_reset, hw.radio_dio0)
+        );
+        spawn_tracked!(spawner, BLINKY, blinky());
+
+        // Run the "blockers" in a single task or right here
+        spawn_tracked!(
+            spawner,
+            USB,
+            usb_and_repl_task(hw.usb_device, hw.usb_logger_class, hw.usb_class)
+        );
     });
+}
+
+// --- Hardware Task Wrappers ---
+
+#[tracked_task]
+#[embassy_executor::task]
+pub async fn wifi_task(
+    pwr: embassy_rp::gpio::Output<'static>,
+    spi: cyw43_pio::PioSpi<'static, embassy_rp::peripherals::PIO0, 0>,
+) -> ! {
+    wifi_task_driver(pwr, spi).await
+}
+
+#[tracked_task]
+#[embassy_executor::task]
+pub async fn imu_task(
+    i2c: embassy_rp::i2c::I2c<'static, embassy_rp::peripherals::I2C0, embassy_rp::i2c::Async>,
+) -> ! {
+    imu_task_driver(i2c).await
+}
+
+#[tracked_task]
+#[embassy_executor::task]
+pub async fn radio_task(
+    spi: embassy_rp::spi::Spi<'static, embassy_rp::peripherals::SPI1, embassy_rp::spi::Async>,
+    cs: embassy_rp::gpio::Output<'static>,
+    reset: embassy_rp::gpio::Output<'static>,
+    dio0: embassy_rp::gpio::Input<'static>,
+) -> ! {
+    radio_task_driver(spi, cs, reset, dio0).await
+}
+
+#[tracked_task]
+#[embassy_executor::task]
+pub async fn sd_card_task(
+    spi: embassy_rp::spi::Spi<'static, embassy_rp::peripherals::SPI0, embassy_rp::spi::Async>,
+    cs: embassy_rp::gpio::Output<'static>,
+) -> ! {
+    sd_card_task_driver(spi, cs).await
 }
