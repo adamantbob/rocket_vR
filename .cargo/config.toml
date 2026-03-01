@@ -15,7 +15,6 @@ uf2-pico = "run -p rocket_vR --target thumbv6m-none-eabi --features rp2040 --con
 uf2-pico2 = "run -p rocket_vR --target thumbv8m.main-none-eabihf --features rp2350 --config target.thumbv8m.main-none-eabihf.runner='elf2uf2-rs'"
 
 [build]
-target = "thumbv8m.main-none-eabihf"
 
 [env]
 DEFMT_LOG = "debug"
