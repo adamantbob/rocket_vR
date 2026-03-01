@@ -135,7 +135,7 @@ impl Sub for DeciPercent {
 #[macro_export]
 macro_rules! deci_percent {
     ($num:expr) => {
-        rocket_core::health_types::DeciPercent::new($num)
+        $crate::health_types::DeciPercent::new($num)
     };
 }
 

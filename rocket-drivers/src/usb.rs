@@ -1,5 +1,3 @@
-use crate::Irqs;
-use embassy_rp::Peri;
 use embassy_rp::peripherals::USB;
 use embassy_rp::usb::Driver;
 use embassy_usb::class::cdc_acm::{CdcAcmClass, State};
@@ -41,13 +39,11 @@ const _: () = assert!(
 ///
 /// Returns a tuple containing the REPL serial class and a future that runs the USB stack.
 pub fn setup_usb(
-    usb: Peri<'static, USB>,
+    usb_driver: Driver<'static, embassy_rp::peripherals::USB>,
 ) -> (
     CdcAcmClass<'static, Driver<'static, USB>>,
     impl core::future::Future<Output = ()>,
 ) {
-    let usb_driver = Driver::new(usb, Irqs);
-
     // Create embassy-usb Config
     let mut config = Config::new(0xc0de, 0xcafe);
     config.manufacturer = Some("Embassy");

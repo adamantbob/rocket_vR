@@ -1,9 +1,9 @@
-use crate::sd_card::{MAX_NAME_LEN, MAX_OPEN_FILES};
-use crate::{error, info, local_info, local_warn};
+use super::{MAX_NAME_LEN, MAX_OPEN_FILES};
 use core::fmt::Write;
 use embassy_time::{Delay, Duration, Instant, Timer};
 use embedded_sdmmc::{Mode, RawDirectory, RawFile, SdCard, TimeSource, VolumeIdx, VolumeManager};
 use rocket_core::log::{LOG_CHANNEL, LogBuffer, LogEntry, MAX_LOG_LINE_LEN};
+use rocket_core::{error, info, local_info, local_warn};
 
 /// Manages SD card logging state and operations.
 ///
@@ -294,7 +294,7 @@ where
             }
         }
         if file_num > 999 {
-            crate::local_error!("Too many log files on SD card");
+            rocket_core::local_error!("Too many log files on SD card");
         }
     }
 }

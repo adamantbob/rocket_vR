@@ -5,10 +5,10 @@ edition = "2024"
 default-run = "rocket_vR"
 
 [features]
-verbose-utilization = []
-debug-imu = []
-rp2040 = ["embassy-rp/rp2040"]
-rp2350 = ["embassy-rp/rp235xa"]
+rp2040 = ["embassy-rp/rp2040", "rocket-os/rp2040", "rocket-drivers/rp2040"]
+rp2350 = ["embassy-rp/rp235xa", "rocket-os/rp2350", "rocket-drivers/rp2350"]
+verbose-utilization = ["rocket-os/verbose-utilization"]
+debug-imu = ["rocket-drivers/debug-imu"]
 
 [dependencies]
 embassy-embedded-hal = { git = "https://github.com/embassy-rs/embassy", features = [
@@ -90,6 +90,8 @@ postcard = { version = "1", default-features = false }
 
 proc-macros = { path = "../proc-macros" }
 rocket-core = { path = "../rocket-core", features = ["defmt"] }
+rocket-os = { path = "../rocket-os" }
+rocket-drivers = { path = "../rocket-drivers" }
 
 [profile.release]
 debug = 2

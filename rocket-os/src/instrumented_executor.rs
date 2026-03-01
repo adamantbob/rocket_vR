@@ -120,25 +120,7 @@ static CORE_WAKE_SIGNALS: [AtomicPtr<AtomicBool>; 2] = [
     AtomicPtr::new(core::ptr::null_mut()),
 ];
 
-/// Accumulated metrics for one executor instance.
-///
-/// Both fields are monotonically increasing counters; compute deltas between samples
-/// to get per-interval rates.
-pub struct ExecutorMetrics {
-    /// Total time (in embassy-time ticks) that the executor spent in `WFE` sleep.
-    pub idle_ticks: AtomicU32,
-    /// Number of times the executor's run loop invoked `inner.poll()`.
-    pub poll_count: AtomicU32,
-}
-
-impl ExecutorMetrics {
-    pub const fn new() -> Self {
-        Self {
-            idle_ticks: AtomicU32::new(0),
-            poll_count: AtomicU32::new(0),
-        }
-    }
-}
+pub use rocket_core::utilization::ExecutorMetrics;
 
 /// Sentinel context value used by Embassy's cortex-m thread-mode executor.
 /// We replicate it here so `__pender` can distinguish interrupt vs. thread contexts.

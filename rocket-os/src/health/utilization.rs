@@ -1,20 +1,18 @@
+use embassy_time::Duration;
 #[cfg(feature = "verbose-utilization")]
-use crate::{debug, error, warn};
-#[cfg(not(feature = "verbose-utilization"))]
-use crate::{error, warn};
-use core::future::Future;
-use core::pin::Pin;
-use core::task::{Context, Poll};
-use defmt_rtt as _;
-use embassy_time::{Duration, Instant};
-use portable_atomic::{AtomicU32, Ordering};
+use embassy_time::Instant;
+use portable_atomic::Ordering;
 use rocket_core::CPUHealth;
+#[cfg(feature = "verbose-utilization")]
+use rocket_core::{debug, error, warn};
+#[cfg(not(feature = "verbose-utilization"))]
+use rocket_core::{error, warn};
 
 use crate::health::stack::{self, sample_stack_usage};
 use crate::instrumented_executor;
-use crate::state_machine::SYSTEM_HEALTH;
+use rocket_core::blackboard::SYSTEM_HEALTH;
+use rocket_core::health_types::DeciPercent;
 use rocket_core::log::{LOG_CHANNEL, LogEntry};
-use rocket_core::{deci_percent, health_types::DeciPercent};
 
 // Utilization Tracking
 // ===================
@@ -27,66 +25,17 @@ use rocket_core::{deci_percent, health_types::DeciPercent};
 // 1000 == 100.0%, 10 == 1.0%, 1 == 0.1%.
 // This avoids all floating-point arithmetic on the hot stats path.
 
-#[derive(Clone, Copy)]
-pub struct TaskId(pub usize);
-
-pub const MAX_TASKS: usize = 16;
-
-// Thresholds in tenths of a percent (1000 == 100.0%).
-pub const TASK_USAGE_WARNING_THRESHOLD: DeciPercent = deci_percent!(15);
-pub const TOTAL_USAGE_WARNING_THRESHOLD: DeciPercent = deci_percent!(40);
-pub const TOTAL_USAGE_ALARM_THRESHOLD: DeciPercent = deci_percent!(80);
-pub const HIGH_PRIORITY_TASK_USAGE_THRESHOLD: DeciPercent = deci_percent!(20);
-pub const STACK_USAGE_ALARM_THRESHOLD: DeciPercent = deci_percent!(80);
-
-// Multicore safe profiling using atomics.
-static TASK_TICKS: [AtomicU32; MAX_TASKS] = [const { AtomicU32::new(0) }; MAX_TASKS];
-static TASK_POLLS: [AtomicU32; MAX_TASKS] = [const { AtomicU32::new(0) }; MAX_TASKS];
+pub use rocket_core::utilization::{
+    MAX_TASKS, TaskId, TrackedExt, TrackedFuture, add_task_polls, add_task_ticks,
+};
 
 fn get_task_ticks(id: usize) -> u32 {
-    TASK_TICKS[id].load(Ordering::Relaxed)
-}
-
-fn add_task_ticks(id: usize, delta: u32) {
-    if id < MAX_TASKS {
-        TASK_TICKS[id].fetch_add(delta, Ordering::Relaxed);
-    }
+    rocket_core::utilization::TASK_TICKS[id].load(Ordering::Relaxed)
 }
 
 fn get_task_polls(id: usize) -> u32 {
-    TASK_POLLS[id].load(Ordering::Relaxed)
+    rocket_core::utilization::TASK_POLLS[id].load(Ordering::Relaxed)
 }
-
-fn add_task_polls(id: usize, delta: u32) {
-    if id < MAX_TASKS {
-        TASK_POLLS[id].fetch_add(delta, Ordering::Relaxed);
-    }
-}
-
-pub struct TrackedFuture<F> {
-    id: TaskId,
-    inner: F,
-}
-
-impl<F: Future> Future for TrackedFuture<F> {
-    type Output = F::Output;
-    fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
-        let start = Instant::now().as_ticks() as u32;
-        let res = unsafe { self.as_mut().map_unchecked_mut(|s| &mut s.inner) }.poll(cx);
-        let end = Instant::now().as_ticks() as u32;
-        add_task_ticks(self.id.0, end.wrapping_sub(start));
-        add_task_polls(self.id.0, 1);
-        res
-    }
-}
-
-pub trait TrackedExt: Future + Sized {
-    fn tracked(self, id: TaskId) -> TrackedFuture<Self> {
-        TrackedFuture { id, inner: self }
-    }
-}
-
-impl<F: Future> TrackedExt for F {}
 
 #[embassy_executor::task]
 pub async fn stats_task(
@@ -112,8 +61,8 @@ pub async fn stats_task(
 
             let now = embassy_time::Instant::now();
 
-            let metrics0 = &crate::METRICS_CORE0;
-            let metrics1 = &crate::METRICS_CORE1;
+            let metrics0 = &rocket_core::utilization::METRICS_CORE0;
+            let metrics1 = &rocket_core::utilization::METRICS_CORE1;
 
             let idle0 = metrics0.idle_ticks.load(Ordering::Relaxed);
             let idle1 = metrics1.idle_ticks.load(Ordering::Relaxed);
@@ -178,41 +127,41 @@ pub async fn stats_task(
                 last_task_ticks[i] = ticks;
                 last_task_polls[i] = polls;
 
-                if task_usages[i] > TASK_USAGE_WARNING_THRESHOLD {
+                if task_usages[i] > rocket_core::utilization::TASK_USAGE_WARNING_THRESHOLD {
                     warn!("HIGH CPU USAGE: Task {}: {}", names[i], task_usages[i]);
                 }
             }
 
             // Warn when alarm threshold is crossed.
-            if usage0_total > TOTAL_USAGE_WARNING_THRESHOLD
-                || usage1_total > TOTAL_USAGE_WARNING_THRESHOLD
+            if usage0_total > rocket_core::utilization::TOTAL_USAGE_WARNING_THRESHOLD
+                || usage1_total > rocket_core::utilization::TOTAL_USAGE_WARNING_THRESHOLD
             {
                 warn!(
                     "HIGH CPU LOAD: Core 0: {}, Core 1: {}",
                     usage0_total, usage1_total,
                 );
             }
-            if usage0_total > TOTAL_USAGE_ALARM_THRESHOLD
-                || usage1_total > TOTAL_USAGE_ALARM_THRESHOLD
+            if usage0_total > rocket_core::utilization::TOTAL_USAGE_ALARM_THRESHOLD
+                || usage1_total > rocket_core::utilization::TOTAL_USAGE_ALARM_THRESHOLD
             {
                 error!(
                     "CRITICAL CPU LOAD: Core 0: {}, Core 1: {}",
                     usage0_total, usage1_total,
                 );
             }
-            if usage0_high_prio > HIGH_PRIORITY_TASK_USAGE_THRESHOLD {
+            if usage0_high_prio > rocket_core::utilization::HIGH_PRIORITY_TASK_USAGE_THRESHOLD {
                 error!(
                     "CRITICAL HIGH PRIORITY CPU USAGE: Core 0: {}",
                     usage0_high_prio,
                 );
             }
-            if usage0_background > TOTAL_USAGE_ALARM_THRESHOLD {
+            if usage0_background > rocket_core::utilization::TOTAL_USAGE_ALARM_THRESHOLD {
                 error!(
                     "CRITICAL BACKGROUND CPU USAGE: Core 0: {}",
                     usage0_background,
                 );
             }
-            if usage1_stack_hwm > STACK_USAGE_ALARM_THRESHOLD {
+            if usage1_stack_hwm > rocket_core::utilization::STACK_USAGE_ALARM_THRESHOLD {
                 warn!("HIGH STACK USAGE: Core 1: Stack HWM: {}", usage1_stack_hwm,);
             }
 
@@ -260,7 +209,7 @@ pub async fn stats_task(
                     poll1,
                 );
 
-                if usage1_stack_hwm > STACK_USAGE_ALARM_THRESHOLD {
+                if usage1_stack_hwm > rocket_core::utilization::STACK_USAGE_ALARM_THRESHOLD {
                     warn!(
                         "ALARM: Core 1 stack nearing overflow! ({})",
                         usage1_stack_hwm
@@ -307,37 +256,4 @@ pub async fn stats_task(
     }
     .tracked(stats_id)
     .await;
-}
-
-/// Defines the list of tasks to be tracked for utilization and verifies the count at compile-time.
-///
-/// This macro generates unique `TaskId` constants and a `TASK_NAMES` array for use in `stats_task`.
-///
-/// # Example
-/// ```rust
-/// define_utilization_tasks!(Wifi [0], Usb [0], Blinky [1]);
-/// ```
-#[macro_export]
-macro_rules! define_utilization_tasks {
-    ($($name:ident [$core:expr]),*) => {
-        #[allow(non_camel_case_types)]
-        pub enum TaskIdEnum {
-            $($name),*
-        }
-
-        /// Human-readable names of the registered tasks.
-        pub const TASK_NAMES: &[&'static str] = &[ $( stringify!($name) ),* ];
-
-        /// Core assignments for the registered tasks.
-        pub const TASK_CORES: &[u8] = &[ $( $core ),* ];
-
-        // Compile-time assertion that we haven't exceeded MAX_TASKS.
-        const _: () = assert!(TASK_NAMES.len() <= $crate::health::utilization::MAX_TASKS, "Too many tasks registered for utilization tracking!");
-
-        $(
-            #[allow(non_upper_case_globals)]
-            /// Unique identifier for the task's utilization tracking.
-            pub const $name: $crate::health::utilization::TaskId = $crate::health::utilization::TaskId(TaskIdEnum::$name as usize);
-        )*
-    }
 }

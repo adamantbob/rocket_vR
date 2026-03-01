@@ -49,6 +49,8 @@
 //! Hardware CRC is enabled on the RFM95, providing a second layer of error
 //! detection on top of postcard's own integrity checking.
 
+#![allow(dead_code)]
+
 use defmt::error;
 use embassy_time::{Duration, Timer};
 use embedded_hal_1::digital::OutputPin;
