@@ -99,8 +99,7 @@ impl Hardware {
 
         // Setup USB
         let usb_driver = UsbDriver::new(usb, Irqs);
-        let (mut usb_class, usb_logger_class, usb_device) =
-            rocket_drivers::usb::setup_usb(usb_driver);
+        let (usb_class, usb_logger_class, usb_device) = rocket_drivers::usb::setup_usb(usb_driver);
 
         // Core 1
         let core1 = r.CoreR.core1.into();
