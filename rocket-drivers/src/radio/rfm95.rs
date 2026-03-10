@@ -252,7 +252,7 @@ pub enum RocketCommand {
 // ---------------------------------------------------------------------------
 
 /// Signal quality metrics from the last received packet.
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, defmt::Format)]
 pub struct SignalQuality {
     /// Packet RSSI in dBm. Typical range: -120 to -30 dBm.
     pub rssi_dbm: i16,
@@ -265,7 +265,7 @@ pub struct SignalQuality {
 // Error type
 // ---------------------------------------------------------------------------
 
-#[derive(Debug)]
+#[derive(Debug, defmt::Format)]
 pub enum RadioError {
     /// SPI transaction failed.
     Spi,

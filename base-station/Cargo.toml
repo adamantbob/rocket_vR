@@ -1,0 +1,80 @@
+[package]
+name = "base-station"
+version = "0.1.0"
+edition = "2024"
+default-run = "base-station"
+
+[features]
+rp2040 = ["embassy-rp/rp2040", "rocket-drivers/rp2040", "rocket-os/rp2040"]
+
+[dependencies]
+embassy-embedded-hal = { git = "https://github.com/embassy-rs/embassy", features = [
+    "defmt",
+] }
+embassy-executor = { git = "https://github.com/embassy-rs/embassy", features = [
+    "executor-thread",
+    "defmt",
+] }
+
+embassy-sync = { git = "https://github.com/embassy-rs/embassy", features = [
+    "defmt",
+] }
+embassy-rp = { git = "https://github.com/embassy-rs/embassy", features = [
+    "defmt",
+    "time-driver",
+    "critical-section-impl",
+    "unstable-pac",
+    "binary-info",
+    "rp2040",
+] }
+
+embassy-time = { git = "https://github.com/embassy-rs/embassy", features = [
+    "defmt",
+    "defmt-timestamp-uptime",
+] }
+embassy-futures = { git = "https://github.com/embassy-rs/embassy" }
+
+defmt = "1.0.1"
+
+serde = { version = "1.0.203", default-features = false, features = ["derive"] }
+
+assign-resources = { git = "https://github.com/adamgreig/assign-resources", rev = "bd22cb7a92031fb16f74a5da42469d466c33383e" }
+
+smart-leds = "0.3.0"
+log = "0.4"
+embassy-usb = { git = "https://github.com/embassy-rs/embassy" }
+embassy-usb-logger = { git = "https://github.com/embassy-rs/embassy" }
+heapless = { version = "0.8", features = ["defmt-03"] }
+
+embedded-hal-1 = { package = "embedded-hal", version = "1.0" }
+embedded-hal-async = "1.0"
+embedded-hal-bus = { version = "0.1", features = ["async"] }
+static_cell = "2.1"
+portable-atomic = { version = "1.5", features = ["critical-section"] }
+
+
+postcard = { version = "1", default-features = false }
+
+proc-macros = { path = "../proc-macros" }
+rocket-core = { path = "../rocket-core", features = ["defmt"] }
+rocket-drivers = { path = "../rocket-drivers" }
+rocket-os = { path = "../rocket-os" }
+
+[profile.release]
+debug = 2
+lto = true
+opt-level = 'z'
+
+[profile.dev]
+debug = 2
+lto = true
+opt-level = 'z'
+
+[[bin]]
+name = "base-station"
+path = "src/main.rs"
+
+[target.'cfg(target_arch = "arm")'.dependencies]
+cortex-m = { version = "0.7.6", features = ["inline-asm"] }
+cortex-m-rt = "0.7.5"
+defmt-rtt = "1.0.0"

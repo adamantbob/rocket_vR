@@ -1,0 +1,14 @@
+﻿cargo : warning: profiles for the non root package will be ignored, specify profiles at the workspace root:
+At line:1 char:1
++ cargo check -p base-station --target thumbv6m-none-eabi --features rp ...
++ ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+    + CategoryInfo          : NotSpecified: (warning: profil...workspace root::String) [], RemoteException
+    + FullyQualifiedErrorId : NativeCommandError
+ 
+package:   C:\Users\Mike\OneDrive\Documents\git\rocket_vR\rocket\Cargo.toml
+workspace: C:\Users\Mike\OneDrive\Documents\git\rocket_vR\Cargo.toml
+warning: profiles for the non root package will be ignored, specify profiles at the workspace root:
+package:   C:\Users\Mike\OneDrive\Documents\git\rocket_vR\base-station\Cargo.toml
+workspace: C:\Users\Mike\OneDrive\Documents\git\rocket_vR\Cargo.toml
+    Checking base-station v0.1.0 (C:\Users\Mike\OneDrive\Documents\git\rocket_vR\base-station)
+    Finished `dev` profile [optimized + debuginfo] target(s) in 0.97s

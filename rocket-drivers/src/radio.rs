@@ -6,8 +6,8 @@ use rocket_core::local_info;
 
 use rocket_core::radio_types;
 
-mod rfm95;
-use rfm95::*;
+pub mod rfm95;
+pub use rfm95::{Bandwidth, CodingRate, LoRaConfig, Rfm95, SignalQuality, SpreadingFactor};
 
 /// Runs the RFM95 Radio
 pub async fn radio_task_driver(
@@ -33,7 +33,7 @@ pub async fn radio_task_driver(
         .unwrap();
 
     local_info!("Radio Initialized");
-    let mut ticker = Ticker::every(Duration::from_secs(1));
+    let mut ticker = Ticker::every(Duration::from_millis(10));
     let mut packet_count = 0;
     loop {
         let packet = radio_types::TelemetryPacket {

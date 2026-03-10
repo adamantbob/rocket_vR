@@ -94,11 +94,8 @@ impl Hardware {
     pub fn init(p: embassy_rp::Peripherals) -> Self {
         let r = AssignedResources::take(p);
 
-        // USB
-        let usb = r.UsbR.usb.into();
-
         // Setup USB
-        let usb_driver = UsbDriver::new(usb, Irqs);
+        let usb_driver = UsbDriver::new(r.UsbR.usb, Irqs);
         let (usb_class, usb_logger_class, usb_device) = rocket_drivers::usb::setup_usb(usb_driver);
 
         // Core 1
