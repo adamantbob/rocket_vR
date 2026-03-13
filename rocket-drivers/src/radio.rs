@@ -2,6 +2,7 @@ use embassy_rp::gpio::{Input, Output};
 use embassy_rp::spi::{Async, Spi};
 use embassy_time::{Duration, Ticker};
 use embedded_hal_bus::spi::ExclusiveDevice;
+use rocket_core::blackboard::SYSTEM_HEALTH;
 use rocket_core::local_info;
 
 use rocket_core::radio_types;
@@ -24,6 +25,7 @@ pub async fn radio_task_driver(
         bandwidth: Bandwidth::BW125,
         coding_rate: CodingRate::CR4_5,
         tx_power_dbm: 17,
+        preamble_symbols: 12,
     };
 
     // Initialise the radio.
@@ -36,16 +38,17 @@ pub async fn radio_task_driver(
     let mut ticker = Ticker::every(Duration::from_millis(10));
     let mut packet_count = 0;
     loop {
-        let packet = radio_types::TelemetryPacket {
-            tickstamp: embassy_time::Instant::now().as_ticks() as u64,
-            altitude_mm: packet_count,
-            velocity_z_mms: 0,
-            accel_z_mg: 0,
+        let cpu_utilization = SYSTEM_HEALTH.cpu_health.read().usage_c0.ceil_percent_u8()
+            + SYSTEM_HEALTH.cpu_health.read().usage_c1.ceil_percent_u8();
+        let packet = radio_types::TelemetryPacketV1 {
+            tickstamp_seconds_tenths: (embassy_time::Instant::now().as_millis() / 100) as u32,
+            altitude_m: packet_count,
+            velocity_z_ms: 0,
+            accel_z_ms2: 0,
             lat_raw: 0,
             lon_raw: 0,
             flight_state: 0,
-            cpu0_utilization: 0,
-            cpu1_utilization: 0,
+            cpu_utilization: cpu_utilization,
         };
         radio.transmit(&packet).await.unwrap();
         local_info!("Telemetry sent: {}", packet_count);

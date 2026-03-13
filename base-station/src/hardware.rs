@@ -19,7 +19,7 @@ use embassy_rp::peripherals::*;
 use embassy_rp::pio::Pio;
 use embassy_rp::spi::{Async as SpiAsync, Config as SpiConfig, Spi};
 use embassy_rp::usb::Driver as UsbDriver;
-use embassy_rp::{bind_interrupts, dma, pio, usb};
+use embassy_rp::{bind_interrupts, dma, pio};
 use embassy_usb::UsbDevice;
 use embassy_usb::class::cdc_acm::CdcAcmClass;
 

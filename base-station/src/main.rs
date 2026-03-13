@@ -53,6 +53,7 @@ async fn radio_rx_task(
         spreading_factor: SpreadingFactor::SF9,
         coding_rate: CodingRate::CR4_5,
         tx_power_dbm: 17,
+        preamble_symbols: 12,
     };
 
     let spi_dev = ExclusiveDevice::new(spi, cs, embassy_time::Delay);
@@ -67,14 +68,16 @@ async fn radio_rx_task(
     > = Rfm95::new(spi_dev, reset, dio0, config).await.unwrap();
 
     loop {
-        match radio.receive::<TelemetryPacket>().await {
+        match radio.receive::<TelemetryPacketV1>().await {
             Ok((packet, quality)) => {
                 log::info!(
-                    "RX: FS={} alt={}m rssi={} snr={}",
+                    "RX: Time={}s FS={} alt={}m rssi={} snr={} cpu={}",
+                    packet.tickstamp_seconds_tenths as f32 / 10.0,
                     packet.flight_state,
-                    packet.altitude_mm,
+                    packet.altitude_m,
                     quality.rssi_dbm,
-                    quality.snr_db_tenths
+                    quality.snr_db_tenths,
+                    packet.cpu_utilization,
                 );
             }
             Err(e) => {

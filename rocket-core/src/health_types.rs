@@ -114,6 +114,12 @@ impl From<i32> for DeciPercent {
     }
 }
 
+impl From<DeciPercent> for u32 {
+    fn from(dp: DeciPercent) -> Self {
+        dp.num
+    }
+}
+
 impl Add for DeciPercent {
     type Output = Self;
     fn add(self, rhs: Self) -> Self {
