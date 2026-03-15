@@ -43,7 +43,7 @@ async fn radio_rx_task(
     dio0: embassy_rp::gpio::Input<'static>,
 ) -> ! {
     use embedded_hal_bus::spi::ExclusiveDevice;
-    use rocket_core::radio_types::TelemetryPacket;
+    // Removed unused import
     use rocket_drivers::radio::{Bandwidth, CodingRate, LoRaConfig, Rfm95, SpreadingFactor};
 
     // The Integrated Feather RP2040 RFM95 uses 915MHz LoRa.
@@ -68,17 +68,28 @@ async fn radio_rx_task(
     > = Rfm95::new(spi_dev, reset, dio0, config).await.unwrap();
 
     loop {
-        match radio.receive::<TelemetryPacketV1>().await {
-            Ok((packet, quality)) => {
-                log::info!(
-                    "RX: Time={}s FS={} alt={}m rssi={} snr={} cpu={}",
-                    packet.tickstamp_seconds_tenths as f32 / 10.0,
-                    packet.flight_state,
-                    packet.altitude_m,
-                    quality.rssi_dbm,
-                    quality.snr_db_tenths,
-                    packet.cpu_utilization,
-                );
+        match radio
+            .receive::<rocket_core::radio_types::RadioPacket>()
+            .await
+        {
+            Ok((radio_packet, quality)) => {
+                use rocket_core::radio_types::RadioPacket;
+                match radio_packet {
+                    RadioPacket::TelemetryV1(packet) => {
+                        log::info!(
+                            "RX [TELEMETRY V1]: Time={}s FS={} alt={}m rssi={} snr={} cpu={}",
+                            packet.tickstamp_seconds_tenths as f32 / 10.0,
+                            packet.flight_state,
+                            packet.altitude_m,
+                            quality.rssi_dbm,
+                            quality.snr_db_tenths,
+                            packet.cpu_utilization,
+                        );
+                    }
+                    RadioPacket::CommandV1(cmd) => {
+                        log::info!("RX [COMMAND]: Received sequence {}", cmd.sequence);
+                    }
+                }
             }
             Err(e) => {
                 log::error!("Radio RX error: {:?}", e);
