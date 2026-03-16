@@ -9,6 +9,7 @@ rp2040 = ["embassy-rp/rp2040", "rocket-os/rp2040", "rocket-drivers/rp2040"]
 rp2350 = ["embassy-rp/rp235xa", "rocket-os/rp2350", "rocket-drivers/rp2350"]
 verbose-utilization = ["rocket-os/verbose-utilization"]
 debug-imu = ["rocket-drivers/debug-imu"]
+debug-gps = ["rocket-drivers/debug-gps"]
 
 [dependencies]
 embassy-embedded-hal = { git = "https://github.com/embassy-rs/embassy", features = [

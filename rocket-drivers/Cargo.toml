@@ -45,3 +45,4 @@ embassy-usb-logger = { git = "https://github.com/embassy-rs/embassy" }
 rp2040 = ["embassy-rp/rp2040"]
 rp2350 = ["embassy-rp/rp235xa"]
 debug-imu = []
+debug-gps = []

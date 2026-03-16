@@ -102,15 +102,15 @@ impl Hardware {
         let core1 = r.CoreR.core1.into();
 
         // GPS
-        static GPS_TX_BUF: StaticCell<[u8; 64]> = StaticCell::new();
-        static GPS_RX_BUF: StaticCell<[u8; 256]> = StaticCell::new();
+        static GPS_TX_BUF: StaticCell<[u8; 128]> = StaticCell::new();
+        static GPS_RX_BUF: StaticCell<[u8; 1024]> = StaticCell::new();
         let gps_uart = BufferedUart::new(
             r.GpsR.uart,
             r.GpsR.tx,
             r.GpsR.rx,
             Irqs,
-            GPS_TX_BUF.init([0; 64]),
-            GPS_RX_BUF.init([0; 256]),
+            GPS_TX_BUF.init([0; 128]),
+            GPS_RX_BUF.init([0; 1024]),
             UartConfig::default(),
         );
 
