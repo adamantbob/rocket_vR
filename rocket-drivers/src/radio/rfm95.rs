@@ -452,32 +452,27 @@ where
     /// - [`RadioError::InvalidVersion`] if the VERSION register does not match
     ///   the expected RFM95 value — most likely a wiring problem.
     /// - [`RadioError::InvalidPreambleLength`] if `config.preamble_symbols < 6`.
-    pub async fn new(
-        spi: SPI,
-        reset: RST,
-        dio0: DIO0,
-        config: LoRaConfig,
-    ) -> Result<Self, RadioError> {
-        if config.preamble_symbols < MIN_PREAMBLE_SYMBOLS {
-            return Err(RadioError::InvalidPreambleLength);
-        }
-
-        let mut radio = Self {
+    pub async fn new(spi: SPI, reset: RST, dio0: DIO0, config: LoRaConfig) -> Self {
+        Self {
             spi,
             reset,
             dio0,
             config,
-        };
-
+        }
+    }
+    pub async fn init(&mut self) -> Result<(), RadioError> {
+        if self.config.preamble_symbols < MIN_PREAMBLE_SYMBOLS {
+            return Err(RadioError::InvalidPreambleLength);
+        }
         // Hardware reset sequence for RFM95 (Active-Low):
         // 1. Start HIGH (Enables the chip)
         // 2. Pulse LOW for 10ms (Resets the chip)
         // 3. Return HIGH and wait 10ms (Stabilize)
-        radio.reset.set_high().ok();
+        self.reset.set_high().ok();
         Timer::after(Duration::from_millis(10)).await;
-        radio.reset.set_low().ok();
+        self.reset.set_low().ok();
         Timer::after(Duration::from_millis(10)).await;
-        radio.reset.set_high().ok();
+        self.reset.set_high().ok();
         Timer::after(Duration::from_millis(10)).await;
 
         // Verify chip identity — retry several times to distinguish a
@@ -485,7 +480,7 @@ where
         let mut version = 0u8;
         let mut verified = false;
         for _attempt in 0..5u8 {
-            version = radio.read_reg(regs::VERSION).await?;
+            version = self.read_reg(regs::VERSION).await?;
             if version == RFM95_VERSION {
                 verified = true;
                 break;
@@ -498,31 +493,29 @@ where
         }
 
         // Enter sleep mode before switching to LoRa (required by datasheet).
-        radio.write_reg(regs::OP_MODE, MODE_SLEEP).await?;
+        self.write_reg(regs::OP_MODE, MODE_SLEEP).await?;
         Timer::after(Duration::from_millis(10)).await;
 
         // Set LoRa mode (bit 7) while in sleep.
-        radio
-            .write_reg(regs::OP_MODE, MODE_SLEEP | MODE_LONG_RANGE)
+        self.write_reg(regs::OP_MODE, MODE_SLEEP | MODE_LONG_RANGE)
             .await?;
         Timer::after(Duration::from_millis(10)).await;
 
         // Set FIFO base addresses.
-        radio.write_reg(regs::FIFO_TX_BASE_ADDR, 0x00).await?;
-        radio.write_reg(regs::FIFO_RX_BASE_ADDR, 0x00).await?;
+        self.write_reg(regs::FIFO_TX_BASE_ADDR, 0x00).await?;
+        self.write_reg(regs::FIFO_RX_BASE_ADDR, 0x00).await?;
 
         // LNA: max gain, boost on.
-        radio.write_reg(regs::LNA, 0x23).await?;
+        self.write_reg(regs::LNA, 0x23).await?;
 
         // Apply user configuration.
-        radio.apply_config().await?;
+        self.apply_config().await?;
 
         // Standby.
-        radio
-            .write_reg(regs::OP_MODE, MODE_LONG_RANGE | MODE_STDBY)
+        self.write_reg(regs::OP_MODE, MODE_LONG_RANGE | MODE_STDBY)
             .await?;
 
-        Ok(radio)
+        Ok(())
     }
 
     /// Transmit a packet.
