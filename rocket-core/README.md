@@ -104,13 +104,13 @@ graph LR
     end
 
     subgraph "Core (rocket-core)"
-        LC[("LOG_CHANNEL (128 Items)")]
+        LC[("LOG_CHANNEL - 128 Items")]
     end
 
     subgraph "Consumer (rocket-drivers)"
         SDL[SdLogger Task]
-        BUF[LogBuffer (512B)]
-        SD[(SD Card)]
+        BUF["LogBuffer - 512B"]
+        SD[("SD Card")]
     end
 
     IMU -->|try_send| LC
