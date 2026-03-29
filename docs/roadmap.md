@@ -20,6 +20,15 @@ This document outlines the current status of the `rocket_vR` project and the pla
 - [ ] **GPS Kalman Filter**: Refine the vertical velocity model to better handle spurious lock losses.
 - [ ] **CPU Utilization Fix**: Improve individual task reporting accuracy by subtracting interrupt time (Low priority).
 
+## Testing & Verification
+
+Comprehensive verification of the system requirements is a high-priority goal for the next phase of development:
+
+- [ ] **Concurrency Stress Testing**: Implement a dedicated suite for `rocket-core` to verify `DataCell` atomicity under high-frequency interrupt loads.
+- [ ] **Hardware-in-the-Loop (HIL)**: Develop a test runner for the Picosystem that verifies non-deterministic behaviors like `rocket-os` panic persistence and core isolation.
+- [ ] **Architecture Linting**: Integrate `cargo-deny` or custom linting to enforce the "Blackboard-only" communication boundary.
+- [ ] **Stack Use Profiling**: Implement automated CI tests that trigger the "stack painting" and scanning logic to detect potential overflows.
+
 ## Long-Term Vision
 
 - **GCS Integration**: Bridge the base station telemetry to standard Ground Control Station (GCS) software.

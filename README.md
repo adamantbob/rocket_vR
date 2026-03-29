@@ -56,6 +56,7 @@ For more in-depth information, please refer to the following guides:
 - [**Architecture & Design**](docs/architecture.md): Timing models, task types, and panic handling.
 - [**Hardware & Wiring**](docs/hardware.md): Bill of Materials (BOM) and pin assignments.
 - [**The Brain (rocket-core)**](rocket-core/README.md): Blackboard pattern and flight logic.
+- [**Peripheral Drivers (rocket-drivers)**](rocket-drivers/README.md): Sensor drivers and bus management.
 - [**OS Layer (rocket-os)**](rocket-os/README.md): Instrumented executor and health monitoring.
 - [**Troubleshooting**](docs/troubleshooting.md): Common issues and solutions.
 
