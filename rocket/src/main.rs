@@ -136,9 +136,10 @@ fn main() -> ! {
             let stack_ptr = core::ptr::addr_of_mut!(crate::CORE1_STACK);
             let stack_bottom = stack_ptr as *const u32;
             let stack_top = (stack_ptr as *const u8).add(CORE1_STACK_SIZE - 1024) as *const u32;
-
-            spawner.spawn(
-                stats_task(TASK_NAMES, TASK_CORES, STATS, (stack_bottom, stack_top)).unwrap(),
+            spawn_tracked!(
+                spawner,
+                STATS,
+                stats_task(TASK_NAMES, TASK_CORES, (stack_bottom, stack_top), true)
             );
         }
         // Target core 1 (the executor core)

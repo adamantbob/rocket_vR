@@ -2,16 +2,16 @@
 //!
 //! # Wiring Requirements
 //!
-//! | RFM95 Pin | Function                        | Required |
+//! | RFM95 Pin | Function                         | Required |
 //! |-----------|----------------------------------|----------|
-//! | NSS       | SPI chip select (active low)    | Yes      |
-//! | SCK       | SPI clock                       | Yes      |
-//! | MOSI      | SPI data in                     | Yes      |
-//! | MISO      | SPI data out                    | Yes      |
-//! | RESET     | Active-low hardware reset        | Yes      |
-//! | DIO0      | TX-done / RX-done interrupt     | **Yes**  |
-//! | 3.3V      | Power supply                    | Yes      |
-//! | GND       | Ground                          | Yes      |
+//! | NSS       | SPI chip select (active low)     | Yes      |
+//! | SCK       | SPI clock                        | Yes      |
+//! | MOSI      | SPI data in                      | Yes      |
+//! | MISO      | SPI data out                     | Yes      |
+//! | RESET     | Active-low hardware reset         | Yes      |
+//! | DIO0      | TX-done / RX-done interrupt      | **Yes**  |
+//! | 3.3V      | Power supply                     | Yes      |
+//! | GND       | Ground                           | Yes      |
 //!
 //! **DIO0 must be connected** to a GPIO pin capable of edge detection.
 //! The driver awaits a rising edge on DIO0 to detect TX/RX completion.
@@ -31,6 +31,7 @@
 //!     bandwidth: Bandwidth::BW125,
 //!     coding_rate: CodingRate::CR4_5,
 //!     tx_power_dbm: 17,
+//!     preamble_symbols: 12,
 //! };
 //!
 //! let mut radio = Rfm95::new(spi_device, reset_pin, dio0_pin, config).await?;
@@ -48,6 +49,91 @@
 //! Packets are serialized with [`postcard`] and framed with COBS encoding.
 //! Hardware CRC is enabled on the RFM95, providing a second layer of error
 //! detection on top of postcard's own integrity checking.
+//!
+//! # Configuration Tuning Guide
+//!
+//! Every LoRa parameter trades **range / reliability** against **data rate**.
+//! Use the Semtech LoRa Calculator to model your exact configuration:
+//! <https://www.semtech.com/design-support/lora-calculator>
+//!
+//! ## Spreading Factor (SF)
+//!
+//! Controls how many chirps encode one symbol. Each step up doubles
+//! time-on-air and adds ~2.5 dB of link budget, at half the data rate.
+//!
+//! | SF  | Approx data rate (BW125, CR4/5) | Notes                          |
+//! |-----|----------------------------------|--------------------------------|
+//! | SF7 | ~5.5 kbps                        | Short range, fast              |
+//! | SF9 | ~1.8 kbps                        | **Recommended rocket default** |
+//! | SF10| ~980 bps                         | More link margin, slower       |
+//! | SF12| ~250 bps                         | Maximum range, very slow       |
+//!
+//! SF9 is a good starting point for rocket telemetry: fast enough for
+//! useful data rates (~200 ms per packet), robust to Doppler shift, and
+//! provides a link budget suited for amateur rocket ranges.
+//!
+//! ## Bandwidth (BW)
+//!
+//! Wider bandwidth increases data rate but reduces sensitivity. Importantly
+//! for moving platforms, wider BW also tolerates Doppler shift better.
+//! At 915 MHz, a rocket doing 300 m/s produces ~920 Hz of Doppler shift —
+//! well within BW125's tolerance. If you see decode failures during fast
+//! ascent specifically, try BW250 or BW500.
+//!
+//! ## Coding Rate (CR)
+//!
+//! Forward error correction overhead. CR4/5 adds 25% overhead; CR4/8 adds
+//! 100%. The real-world difference is modest in most environments. CR4/5
+//! is correct for almost all rocket applications — don't change it unless
+//! you are in an unusually noisy RF environment.
+//!
+//! ## Preamble Length
+//!
+//! The preamble is the sequence of chirps that the receiver uses to detect
+//! and synchronise to an incoming packet. The hardware default is 8 symbols.
+//! For mobile nodes such as a rocket, 12–16 symbols is recommended: the
+//! extra symbols give the base station receiver more time to lock on as the
+//! signal characteristics change during flight.
+//!
+//! At SF9/BW125 each symbol is ~4 ms, so going from 8 to 12 symbols adds
+//! ~16 ms to every packet's time-on-air — a negligible cost.
+//!
+//! Both ends of the link must use the same preamble length.
+//!
+//! ## TX Power
+//!
+//! 17 dBm (~50 mW) is the safe continuous-duty limit on the PA_BOOST path.
+//! 20 dBm (~100 mW) is available but the PA_DAC runs hot — watch duty cycle.
+//! In the US, 915 MHz ISM allows up to 30 dBm EIRP, so there is headroom
+//! with a typical antenna.
+//!
+//! ## Recommended Starting Configuration (Rocket)
+//!
+//! ```rust
+//! LoRaConfig {
+//!     frequency_hz:     915_000_000,         // US 915 MHz ISM band
+//!     spreading_factor: SpreadingFactor::SF9, // balance of rate and range
+//!     bandwidth:        Bandwidth::BW125,     // standard; tolerates Doppler
+//!     coding_rate:      CodingRate::CR4_5,    // standard FEC overhead
+//!     tx_power_dbm:     17,                   // 50 mW, safe continuous duty
+//!     preamble_symbols: 12,                   // extra margin for mobile node
+//! }
+//! ```
+//!
+//! This gives ~1.8 kbps — enough for a `TelemetryPacket` every ~200 ms —
+//! with a link budget of ~130 dB (theoretical range of tens of kilometres
+//! with good antennas, far beyond typical amateur rocket flights).
+//!
+//! ## Further Reading
+//!
+//! - **Semtech LoRa Calculator** — model time-on-air, data rate, and
+//!   sensitivity for any SF/BW/CR combination:
+//!   <https://www.semtech.com/design-support/lora-calculator>
+//! - **Semtech AN1200.13** — LoRa Designer's Guide (search for the PDF on
+//!   Semtech's site): covers link budget, sensitivity, and modem config in
+//!   detail with worked examples.
+//! - **"LoRa and Doppler Effect"** — Reynders & Pollin, KU Leuven: academic
+//!   treatment of Doppler tolerance by SF and BW.
 
 #![allow(dead_code)]
 
@@ -85,6 +171,8 @@ mod regs {
     pub const MODEM_CONFIG1: u8 = 0x1D;
     pub const MODEM_CONFIG2: u8 = 0x1E;
     pub const MODEM_CONFIG3: u8 = 0x26;
+    pub const PREAMBLE_MSB: u8 = 0x20;
+    pub const PREAMBLE_LSB: u8 = 0x21;
     pub const PAYLOAD_LENGTH: u8 = 0x22;
     pub const MAX_PAYLOAD_LENGTH: u8 = 0x23;
     pub const SYNC_WORD: u8 = 0x39;
@@ -116,13 +204,14 @@ const RFM95_VERSION: u8 = 0x12;
 
 // Crystal oscillator frequency used for frequency calculations
 const FXOSC: u64 = 32_000_000;
-// Frequency step = FXOSC / 2^19
-const FSTEP: u64 = (FXOSC << 8) / 500_000;
 
 // Maximum LoRa payload (hardware limit)
 const MAX_PAYLOAD: usize = 255;
 // Our practical buffer including postcard + COBS overhead
 pub const PACKET_BUFFER_SIZE: usize = 128;
+
+// Minimum preamble length mandated by the LoRa spec.
+const MIN_PREAMBLE_SYMBOLS: u16 = 6;
 
 // ---------------------------------------------------------------------------
 // Configuration types
@@ -130,8 +219,9 @@ pub const PACKET_BUFFER_SIZE: usize = 128;
 
 /// LoRa spreading factor. Higher SF = longer range, lower data rate.
 ///
-/// For rocket telemetry SF9 is a good balance — ~500 bytes/s at BW125,
-/// robust to Doppler shift, and handles ~15km range with a good antenna.
+/// For rocket telemetry SF9 is a good balance — ~1.8 kbps at BW125,
+/// robust to Doppler shift, and handles ~15 km range with a good antenna.
+/// See the module-level tuning guide for a full comparison table.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum SpreadingFactor {
     SF6 = 6,
@@ -143,9 +233,11 @@ pub enum SpreadingFactor {
     SF12 = 12,
 }
 
-/// LoRa bandwidth. Wider bandwidth = higher data rate, shorter range.
+/// LoRa signal bandwidth. Wider bandwidth = higher data rate, shorter range.
 ///
-/// BW125 is the standard choice for most applications.
+/// BW125 is the standard choice. Wider bandwidths (BW250, BW500) offer
+/// better Doppler tolerance for fast-moving platforms at the cost of
+/// ~3 dB sensitivity. See the module-level tuning guide for details.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum Bandwidth {
     BW7_8 = 0,
@@ -162,8 +254,9 @@ pub enum Bandwidth {
 
 /// LoRa forward error correction coding rate.
 ///
-/// Higher denominator = more redundancy = better error correction at the
-/// cost of data rate. CR4_5 is the standard choice.
+/// Higher denominator = more redundancy = better error correction, at the
+/// cost of data rate. CR4/5 is correct for almost all applications.
+/// See the module-level tuning guide for details.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum CodingRate {
     CR4_5 = 1,
@@ -173,16 +266,27 @@ pub enum CodingRate {
 }
 
 /// Full radio configuration.
+///
+/// See the module-level tuning guide for parameter explanations and the
+/// Semtech LoRa Calculator at <https://www.semtech.com/design-support/lora-calculator>
+/// to model time-on-air and sensitivity for a given configuration.
 #[derive(Clone, Copy, Debug)]
 pub struct LoRaConfig {
     /// Centre frequency in Hz. Must be in the 902–928 MHz US ISM band.
     pub frequency_hz: u32,
+    /// See [`SpreadingFactor`] and the module tuning guide.
     pub spreading_factor: SpreadingFactor,
+    /// See [`Bandwidth`] and the module tuning guide.
     pub bandwidth: Bandwidth,
+    /// See [`CodingRate`] and the module tuning guide.
     pub coding_rate: CodingRate,
     /// TX output power in dBm. Range: 2–20 dBm (PA_BOOST path).
     /// 17 dBm is the safe continuous-duty limit; 20 dBm requires PA_DAC boost.
     pub tx_power_dbm: i8,
+    /// Number of preamble symbols. Must be ≥ 6; 12 is recommended for mobile
+    /// nodes. Both ends of the link must use the same value. At SF9/BW125
+    /// each symbol is ~4 ms — going from 8 to 12 adds ~16 ms per packet.
+    pub preamble_symbols: u16,
 }
 
 impl Default for LoRaConfig {
@@ -193,58 +297,9 @@ impl Default for LoRaConfig {
             bandwidth: Bandwidth::BW125,
             coding_rate: CodingRate::CR4_5,
             tx_power_dbm: 17,
+            preamble_symbols: 12,
         }
     }
-}
-
-// ---------------------------------------------------------------------------
-// Packet types
-// ---------------------------------------------------------------------------
-
-/// Telemetry packet transmitted from rocket to base station.
-///
-/// Both sides must use the same definition — postcard serialization is
-/// not self-describing, so field order and types must match exactly.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct TelemetryPacket {
-    /// Timestamp in embassy ticks.
-    pub tickstamp: u64,
-    /// Altitude above ground in millimetres.
-    pub altitude_mm: i32,
-    /// Vertical velocity in mm/s (positive = ascending).
-    pub velocity_z_mms: i32,
-    /// Z-axis acceleration in milli-G.
-    pub accel_z_mg: i32,
-    /// GPS latitude in degrees * 1e7 (raw integer).
-    pub lat_raw: i32,
-    /// GPS longitude in degrees * 1e7 (raw integer).
-    pub lon_raw: i32,
-    /// Current flight state discriminant.
-    pub flight_state: u8,
-    /// Core 0 CPU utilization in tenths of a percent (1000 = 100.0%).
-    pub cpu0_utilization: u16,
-    /// Core 1 CPU utilization in tenths of a percent.
-    pub cpu1_utilization: u16,
-}
-
-/// Command packet transmitted from base station to rocket.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct CommandPacket {
-    /// Sequence number for deduplication.
-    pub sequence: u16,
-    pub command: RocketCommand,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub enum RocketCommand {
-    /// No-op / keepalive ping.
-    Ping,
-    /// Arm the pyrotechnic channels.
-    Arm,
-    /// Manually trigger parachute deployment.
-    DeployParachutes,
-    /// Abort and safe all pyrotechnics.
-    Abort,
 }
 
 // ---------------------------------------------------------------------------
@@ -252,7 +307,7 @@ pub enum RocketCommand {
 // ---------------------------------------------------------------------------
 
 /// Signal quality metrics from the last received packet.
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, defmt::Format)]
 pub struct SignalQuality {
     /// Packet RSSI in dBm. Typical range: -120 to -30 dBm.
     pub rssi_dbm: i16,
@@ -265,7 +320,7 @@ pub struct SignalQuality {
 // Error type
 // ---------------------------------------------------------------------------
 
-#[derive(Debug)]
+#[derive(Debug, defmt::Format)]
 pub enum RadioError {
     /// SPI transaction failed.
     Spi,
@@ -281,6 +336,8 @@ pub enum RadioError {
     RxTimeout,
     /// Packet too large for buffer.
     PacketTooLarge,
+    /// Preamble length below the LoRa minimum of 6 symbols.
+    InvalidPreambleLength,
 }
 
 // ---------------------------------------------------------------------------
@@ -342,30 +399,30 @@ where
     /// ```
     ///
     /// # Errors
-    /// Returns [`RadioError::InvalidVersion`] if the VERSION register does not
-    /// match the expected RFM95 value — most likely a wiring problem.
-    pub async fn new(
-        spi: SPI,
-        reset: RST,
-        dio0: DIO0,
-        config: LoRaConfig,
-    ) -> Result<Self, RadioError> {
-        let mut radio = Self {
+    /// - [`RadioError::InvalidVersion`] if the VERSION register does not match
+    ///   the expected RFM95 value — most likely a wiring problem.
+    /// - [`RadioError::InvalidPreambleLength`] if `config.preamble_symbols < 6`.
+    pub async fn new(spi: SPI, reset: RST, dio0: DIO0, config: LoRaConfig) -> Self {
+        Self {
             spi,
             reset,
             dio0,
             config,
-        };
-
+        }
+    }
+    pub async fn init(&mut self) -> Result<(), RadioError> {
+        if self.config.preamble_symbols < MIN_PREAMBLE_SYMBOLS {
+            return Err(RadioError::InvalidPreambleLength);
+        }
         // Hardware reset sequence for RFM95 (Active-Low):
         // 1. Start HIGH (Enables the chip)
         // 2. Pulse LOW for 10ms (Resets the chip)
         // 3. Return HIGH and wait 10ms (Stabilize)
-        radio.reset.set_high().ok();
+        self.reset.set_high().ok();
         Timer::after(Duration::from_millis(10)).await;
-        radio.reset.set_low().ok();
+        self.reset.set_low().ok();
         Timer::after(Duration::from_millis(10)).await;
-        radio.reset.set_high().ok();
+        self.reset.set_high().ok();
         Timer::after(Duration::from_millis(10)).await;
 
         // Verify chip identity — retry several times to distinguish a
@@ -373,7 +430,7 @@ where
         let mut version = 0u8;
         let mut verified = false;
         for _attempt in 0..5u8 {
-            version = radio.read_reg(regs::VERSION).await?;
+            version = self.read_reg(regs::VERSION).await?;
             if version == RFM95_VERSION {
                 verified = true;
                 break;
@@ -386,31 +443,29 @@ where
         }
 
         // Enter sleep mode before switching to LoRa (required by datasheet).
-        radio.write_reg(regs::OP_MODE, MODE_SLEEP).await?;
+        self.write_reg(regs::OP_MODE, MODE_SLEEP).await?;
         Timer::after(Duration::from_millis(10)).await;
 
         // Set LoRa mode (bit 7) while in sleep.
-        radio
-            .write_reg(regs::OP_MODE, MODE_SLEEP | MODE_LONG_RANGE)
+        self.write_reg(regs::OP_MODE, MODE_SLEEP | MODE_LONG_RANGE)
             .await?;
         Timer::after(Duration::from_millis(10)).await;
 
         // Set FIFO base addresses.
-        radio.write_reg(regs::FIFO_TX_BASE_ADDR, 0x00).await?;
-        radio.write_reg(regs::FIFO_RX_BASE_ADDR, 0x00).await?;
+        self.write_reg(regs::FIFO_TX_BASE_ADDR, 0x00).await?;
+        self.write_reg(regs::FIFO_RX_BASE_ADDR, 0x00).await?;
 
         // LNA: max gain, boost on.
-        radio.write_reg(regs::LNA, 0x23).await?;
+        self.write_reg(regs::LNA, 0x23).await?;
 
         // Apply user configuration.
-        radio.apply_config().await?;
+        self.apply_config().await?;
 
         // Standby.
-        radio
-            .write_reg(regs::OP_MODE, MODE_LONG_RANGE | MODE_STDBY)
+        self.write_reg(regs::OP_MODE, MODE_LONG_RANGE | MODE_STDBY)
             .await?;
 
-        Ok(radio)
+        Ok(())
     }
 
     /// Transmit a packet.
@@ -547,10 +602,10 @@ where
         let raw_rssi = self.read_reg(regs::PKT_RSSI_VALUE).await?;
         let raw_snr = self.read_reg(regs::PKT_SNR_VALUE).await? as i8;
 
-        // RSSI formula for 915MHz (HF port): RSSI = -157 + raw_rssi
+        // RSSI formula for 915 MHz (HF port): RSSI = -157 + raw_rssi
         let rssi_dbm = -157i16 + raw_rssi as i16;
 
-        // SNR is in units of 0.25 dB, stored as signed byte.
+        // SNR is in units of 0.25 dB, stored as a signed byte.
         // Convert to tenths of dB: snr_tenths = (raw_snr * 10) / 4
         let snr_db_tenths = (raw_snr as i16 * 10) / 4;
 
@@ -563,7 +618,14 @@ where
     /// Reconfigure the radio at runtime.
     ///
     /// Returns to standby, applies new config, returns to standby.
+    ///
+    /// # Errors
+    /// Returns [`RadioError::InvalidPreambleLength`] if
+    /// `config.preamble_symbols < 6` — config is not applied in this case.
     pub async fn reconfigure(&mut self, config: LoRaConfig) -> Result<(), RadioError> {
+        if config.preamble_symbols < MIN_PREAMBLE_SYMBOLS {
+            return Err(RadioError::InvalidPreambleLength);
+        }
         self.config = config;
         self.write_reg(regs::OP_MODE, MODE_LONG_RANGE | MODE_STDBY)
             .await?;
@@ -600,10 +662,19 @@ where
         self.write_reg(regs::MODEM_CONFIG2, (sf << 4) | 0x04)
             .await?;
 
-        // --- Modem config 3: LNA gain set by register, mobile node ---
-        // Set bit 3 (AgcAutoOn) and bit 2 (LowDataRateOptimize for SF11/12)
+        // --- Modem config 3: AGC auto on + LowDataRateOptimize for SF11/12 ---
+        // LowDataRateOptimize (bit 3) is mandatory when the symbol duration
+        // exceeds 16 ms, which occurs at SF11/SF12 with BW125.
         let ldro = if sf >= 11 { 0x08 } else { 0x00 };
         self.write_reg(regs::MODEM_CONFIG3, ldro | 0x04).await?;
+
+        // --- Preamble length ---
+        // 16-bit value split across two registers. Minimum 6, recommended 12
+        // for mobile nodes. Both ends of the link must match.
+        let preamble = self.config.preamble_symbols;
+        self.write_reg(regs::PREAMBLE_MSB, (preamble >> 8) as u8)
+            .await?;
+        self.write_reg(regs::PREAMBLE_LSB, preamble as u8).await?;
 
         // --- TX power ---
         // PA_BOOST path: Pout = 2 + OutputPower (dBm), max 17 dBm normally.
@@ -645,8 +716,7 @@ where
 
     /// Burst-write bytes into the FIFO register.
     async fn write_fifo(&mut self, data: &[u8]) -> Result<(), RadioError> {
-        // Manual transfer: send FIFO write address, then payload.
-        // SpiDevice::write sends address + data in one CS assertion.
+        // Send FIFO write address then payload in one CS assertion.
         let mut buf = [0u8; PACKET_BUFFER_SIZE + 1];
         buf[0] = regs::FIFO | 0x80;
         buf[1..=data.len()].copy_from_slice(data);

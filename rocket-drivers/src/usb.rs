@@ -47,7 +47,7 @@ pub async fn usb_and_repl_task(
     mut class: CdcAcmClass<'static, UsbDriver<'static, USB>>,
     logger_class: CdcAcmClass<'static, UsbDriver<'static, USB>>,
 ) {
-    let log_fut = embassy_usb_logger::with_class!(1024, log::LevelFilter::Debug, logger_class);
+    let log_fut = embassy_usb_logger::with_class!(1024, log::LevelFilter::Info, logger_class);
     let usb_fut = usb_device.run();
     let repl_fut = repl(&mut class);
     join3(log_fut, usb_fut, repl_fut).await;

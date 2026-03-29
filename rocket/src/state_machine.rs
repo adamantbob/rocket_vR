@@ -1,4 +1,4 @@
-use crate::datacells::{FlightState, save_flight_data};
+use crate::datacells::{FlightState, save_flight_data, try_recover_flight_data};
 use embassy_time::{Duration, Instant, Ticker};
 use heapless::Vec;
 use proc_macros::tracked_task;
@@ -22,7 +22,7 @@ pub async fn state_machine_task() {
     // --- ATTEMPT RECOVERY ---
     // This is here if the code crashes a trips the watchdog mid-flight.
     // It will resume the flight from where it left off.
-    if let Some(recovered) = crate::datacells::try_recover_flight_data() {
+    if let Some(recovered) = try_recover_flight_data() {
         controller.ground_level_mm = Some(recovered.ground_level);
         controller.state = recovered.state;
         info!("Warm start! Resumed at state: {:?}", controller.state);
@@ -52,10 +52,7 @@ pub async fn state_machine_task() {
             info!("Calibration complete. Transitioned to GroundIdle.");
         }
         // After calibration is done, initialize the persistence
-        crate::datacells::save_flight_data(
-            controller.ground_level_mm.unwrap(),
-            FlightState::GroundIdle,
-        );
+        save_flight_data(controller.ground_level_mm.unwrap(), FlightState::GroundIdle);
     }
 
     // --- MAIN FLIGHT LOOP ---

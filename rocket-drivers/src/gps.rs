@@ -1,8 +1,12 @@
 use embassy_futures::select::{Either, select};
-use embassy_rp::uart::BufferedUart;
+use embassy_rp::uart::{BufferedUart, Error as UartError};
 use embassy_time::{Duration, Instant, Ticker, Timer, with_timeout};
 use embedded_io_async::{Read, Write};
 use proc_macros::tracked_task;
+use rocket_core::{info, warn};
+
+#[cfg(feature = "debug-gps")]
+use rocket_core::local_info;
 
 use rocket_core::blackboard::{SENSOR_DATA, SYSTEM_HEALTH};
 
@@ -21,13 +25,9 @@ use rocket_core::log::{LOG_CHANNEL, LogEntry};
 #[tracked_task]
 #[embassy_executor::task]
 pub async fn gps_task(mut uart: BufferedUart) -> ! {
-    // --- 1. Initialization & Memory Allocation ---
-
-    // Initial handshake: Negotiate baudrate (9600 -> 115200) and update rate (1Hz -> 10Hz)
-    upgrade_link(&mut uart).await;
-
-    // Split the UART so we can borrow the receiver independently
-    let (_tx, mut rx) = uart.split();
+    // --- 1. Initialization & Link Search ---
+    // Probes 9600/115200 until a valid link is established and upgraded to 10Hz.
+    let mut current_baud = negotiate_link_speed(&mut uart).await;
 
     // Task-local state
     let mut current_pos = GPSData::new();
@@ -36,75 +36,76 @@ pub async fn gps_task(mut uart: BufferedUart) -> ! {
     let mut filter_init = false;
     let mut last_packet_time = Instant::now();
 
-    // Buffer for assembling individual NMEA sentences (e.g., $GPGGA,...)
     let mut sentence_buffer = [0u8; 128];
     let mut pos = 0;
 
-    // Ticker for periodic health reporting (1Hz)
     let mut ticker = Ticker::every(Duration::from_millis(1000));
 
     // --- 2. Main Event Loop ---
     loop {
-        let mut byte = [0u8; 1];
+        let mut read_buf = [0u8; 64];
 
         // Concurrently wait for UART data OR the 1-second health timer
         match select(
-            with_timeout(Duration::from_millis(200), rx.read(&mut byte)),
+            with_timeout(Duration::from_millis(200), uart.read(&mut read_buf)),
             ticker.next(),
         )
         .await
         {
-            // BRANCH A: UART Data Activity
             Either::First(read_result) => {
                 match read_result {
-                    Ok(Ok(_)) => {
-                        // Successful byte read: reduce timeout "fever"
-                        gps_health.receive_timeout = gps_health.receive_timeout.saturating_sub(1);
-                        let b = byte[0];
+                    Ok(Ok(n)) => {
+                        gps_health.receive_timeout =
+                            gps_health.receive_timeout.saturating_sub(n as u16);
 
-                        // Accumulate bytes until a newline (\n) or carriage return (\r)
-                        if b != b'\n' && b != b'\r' {
-                            if pos < sentence_buffer.len() {
-                                sentence_buffer[pos] = b;
-                                pos += 1;
+                        for i in 0..n {
+                            let b = read_buf[i];
+
+                            if b != b'\n' && b != b'\r' {
+                                if pos < sentence_buffer.len() {
+                                    sentence_buffer[pos] = b;
+                                    pos += 1;
+                                }
+                                continue;
                             }
-                            continue;
-                        }
 
-                        // Complete sentence detected: Process it
-                        if pos > 0 {
-                            handle_full_sentence(
-                                &sentence_buffer[..pos],
-                                &mut current_pos,
-                                &mut gps_health,
-                                &mut filter,
-                                &mut filter_init,
-                                &mut last_packet_time,
-                            );
-                            pos = 0; // Reset buffer pointer
+                            if pos > 0 {
+                                #[cfg(feature = "debug-gps")]
+                                if let Ok(s) = core::str::from_utf8(&sentence_buffer[..pos]) {
+                                    local_info!("GPS Raw: {}", s);
+                                }
+
+                                handle_full_sentence(
+                                    &sentence_buffer[..pos],
+                                    &mut current_pos,
+                                    &mut gps_health,
+                                    &mut filter,
+                                    &mut filter_init,
+                                    &mut last_packet_time,
+                                );
+                                pos = 0;
+                            }
                         }
                     }
-                    // Handle UART errors (e.g., framing errors)
                     Ok(Err(_)) => {
-                        gps_health.receive_timeout = gps_health.receive_timeout.saturating_add(1)
+                        gps_health.parse_errors = gps_health.parse_errors.saturating_add(1);
+
+                        // Background fallback: If link is lost in flight, drop back to 9600 search
+                        if current_baud == 115200 && gps_health.parse_errors > 100 {
+                            warn!("GPS: Link lost at 115200, falling back to search...");
+                            current_baud = negotiate_link_speed(&mut uart).await;
+                            gps_health.parse_errors = 0;
+                        }
                     }
-                    // Handle silence: No bytes received for 200ms
                     Err(_) => {
                         gps_health.receive_timeout = gps_health.receive_timeout.saturating_add(100);
                         current_pos.fix_valid = false;
-                        // local_info!("GPS Alert: Link Timeout!");
-                        // let _ = LOG_CHANNEL.try_send(LogEntry::Event("GPS Alert: Link Timeout!"));
-
-                        // Immediate broadcast of failure status
                         SENSOR_DATA.gps.update(current_pos);
                         let _ = LOG_CHANNEL.try_send(LogEntry::Gps(current_pos));
-                        SYSTEM_HEALTH.gps_health.update(gps_health);
                     }
                 }
             }
-            // BRANCH B: Periodic Update (1Hz)
             Either::Second(_) => {
-                // Periodically sync health metrics to the blackboard
                 SYSTEM_HEALTH.gps_health.update(gps_health);
                 let _ = LOG_CHANNEL.try_send(LogEntry::GPSHealth(gps_health));
             }
@@ -112,13 +113,112 @@ pub async fn gps_task(mut uart: BufferedUart) -> ! {
     }
 }
 
+/// Probes 9600 and 115200 until valid NMEA data is seen.
+/// If valid data is found at 9600, it attempts to upgrade the module to 115200/10Hz.
+async fn negotiate_link_speed(uart: &mut BufferedUart) -> u32 {
+    let mut current_baud = 9600;
+    uart.set_baudrate(9600);
+    info!("GPS: Starting link search (9600)...");
+
+    let mut sentence_buffer = [0u8; 128];
+    let mut pos = 0;
+
+    let mut last_switch = Instant::now();
+    let mut force_switch = false;
+    let mut error_count = 0;
+
+    loop {
+        let mut buf = [0u8; 64];
+
+        // 1. Check for data using standard reader
+        match with_timeout(Duration::from_millis(100), uart.read(&mut buf)).await {
+            Ok(Ok(n)) => {
+                error_count = 0; // Valid bytes read, reset error counter
+                for i in 0..n {
+                    let b = buf[i];
+                    // If we see a '$' in the middle of a buffer, it's likely a sync point
+                    if b == b'$' {
+                        pos = 0;
+                    }
+
+                    if b != b'\n' && b != b'\r' {
+                        if pos < sentence_buffer.len() {
+                            sentence_buffer[pos] = b;
+                            pos += 1;
+                        }
+
+                        // ULTRA-FAST LOCK: If we have at least 3 chars, check for header proof-of-life
+                        if pos >= 3 {
+                            if let Ok(s) = core::str::from_utf8(&sentence_buffer[..pos]) {
+                                if s.starts_with("$GP") || s.starts_with("$GN") {
+                                    if current_baud == 9600 {
+                                        info!("GPS: Valid header at 9600. Upgrading...");
+                                        upgrade_link(uart).await;
+                                        return 115200;
+                                    } else {
+                                        info!("GPS: Valid header at 115200.");
+                                        return 115200;
+                                    }
+                                }
+                            }
+                        }
+                    } else {
+                        pos = 0;
+                    }
+                }
+            }
+            Ok(Err(e)) => {
+                // If we hit framing or break errors, we are almost certainly at the wrong baud rate.
+                // If we see a few in a row, trigger an immediate baud switch instead of waiting for timeout.
+                if matches!(e, UartError::Framing | UartError::Break) {
+                    error_count += 1;
+                    if error_count >= 3 {
+                        force_switch = true;
+                    }
+                }
+            }
+            _ => {}
+        }
+
+        // 2. Check for baud rate switch (timeout or forced)
+        if force_switch || last_switch.elapsed() > Duration::from_millis(1100) {
+            if current_baud == 9600 {
+                current_baud = 115200;
+            } else {
+                current_baud = 9600;
+            }
+            uart.set_baudrate(current_baud);
+            drain_uart(uart).await;
+            last_switch = Instant::now();
+            force_switch = false;
+            pos = 0;
+            error_count = 0;
+        }
+
+        // Nap briefly (1ms) to keep it responsive
+        Timer::after_millis(1).await;
+    }
+}
 /// Commands the GPS module to increase its baudrate to 115200 and
 /// its output frequency to 10Hz using PMTK proprietary commands.
 async fn upgrade_link(uart: &mut BufferedUart) {
-    // 1. Set Baudrate to 115200
-    let _ = uart.write_all(b"$PMTK251,115200*1F\r\n").await;
-    Timer::after_millis(100).await;
+    let baud_cmd = b"$PMTK251,115200*1F\r\n";
+
+    // Drain any boot noise
+    drain_uart(uart).await;
+
+    // Try at current/default 9600 baud
+    let _ = uart.write_all(baud_cmd).await;
+    Timer::after_millis(50).await;
+
+    // Switch local UART to 115200
     uart.set_baudrate(115200);
+    Timer::after_millis(10).await;
+    drain_uart(uart).await;
+
+    // Try again at 115200 in case it was already there but missed the first command
+    let _ = uart.write_all(baud_cmd).await;
+    Timer::after_millis(100).await;
 
     // 2. Set output frequency to 10Hz (100ms interval)
     let _ = uart.write_all(b"$PMTK220,100*2F\r\n").await;
@@ -128,6 +228,13 @@ async fn upgrade_link(uart: &mut BufferedUart) {
     let _ = uart
         .write_all(b"$PMTK314,0,1,0,1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0*28\r\n")
         .await;
+    Timer::after_millis(50).await;
+    drain_uart(uart).await;
+}
+
+async fn drain_uart(uart: &mut BufferedUart) {
+    let mut buf = [0u8; 64];
+    while let Ok(Ok(_)) = with_timeout(Duration::from_millis(5), uart.read(&mut buf)).await {}
 }
 
 /// Orchestrates the validation, parsing, and filtering of a complete NMEA sentence.
@@ -178,6 +285,14 @@ fn handle_full_sentence(
     }
     health.parse_errors = health.parse_errors.saturating_sub(1);
 
+    #[cfg(feature = "debug-gps")]
+    local_info!("GPS Parsed: {:?}", pos_data);
+
+    // Corrected logic: Always commit basic data to the global state,
+    // even if we haven't filtered it yet (no 3D fix).
+    // This allows UI/Telemetery to see sat counts and UTC time.
+    SENSOR_DATA.gps.update(*pos_data);
+
     // Guard 3: Only update the state filter if we have a valid 3D Fix
     if !pos_data.fix_valid {
         return;
@@ -200,8 +315,8 @@ fn handle_full_sentence(
         pos_data.velocity_z_filt = est_vel;
         // Convert f32 (m/s) to i32 (mm/s) for the state machine
         pos_data.velocity_z_mms = (est_vel * 1000.0) as i32;
-    }
 
-    // Commit final data to the global state
-    SENSOR_DATA.gps.update(*pos_data);
+        // Commit final filtered data to the global state
+        SENSOR_DATA.gps.update(*pos_data);
+    }
 }
