@@ -43,6 +43,8 @@ pub struct TelemetryPacketV1 {
     pub flight_state: u8,
     /// Dual Core CPU utilization - 0-200%.
     pub cpu_utilization: u8,
+    /// sequence number, 1 through 255 to help detect drops
+    pub sequence: u8,
 }
 
 /// Full location packet transmitted from Rocket to base station.

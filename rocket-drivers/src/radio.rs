@@ -38,7 +38,7 @@ pub async fn radio_task_driver(
             Ok(_) => {
                 local_info!("Radio Initialized");
                 let mut ticker = Ticker::every(Duration::from_millis(10));
-                let mut packet_count = 0;
+                let mut packet_count: u8 = 0;
                 loop {
                     // Check if it's time to send the schema heartbeat.
                     // We use a non-blocking check by comparing against the next schema tick
@@ -55,20 +55,21 @@ pub async fn radio_task_driver(
                     let telemetry = radio_types::TelemetryPacketV1 {
                         tickstamp_seconds_tenths: (embassy_time::Instant::now().as_millis() / 100)
                             as u16,
-                        altitude_m: packet_count,
+                        altitude_m: 0,
                         velocity_z_dms: 0,
                         accel_z_dms2: 0,
                         lat_offset_1e5: 0,
                         lon_offset_1e5: 0,
                         flight_state: 0,
                         cpu_utilization: cpu_utilization,
+                        sequence: packet_count,
                     };
 
                     let packet = radio_types::RadioPacket::TelemetryV1(telemetry);
 
                     radio.transmit(&packet).await.unwrap();
                     local_info!("Telemetry sent: {}", packet_count);
-                    packet_count += 1;
+                    packet_count = packet_count.wrapping_add(1);
                     ticker.next().await;
                 }
             }
