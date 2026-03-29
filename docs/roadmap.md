@@ -17,6 +17,8 @@ This document outlines the current status of the `rocket_vR` project and the pla
 - [ ] **Command Uplink**: Implement a task on the rocket to receive and handle commands from the base station.
 - [ ] **SD Logging**: Mirror all telemetry to an onboard microSD card for post-flight analysis.
 - [ ] **GPS Optimization**: Further refinement of the Kalmann filtering for altitude estimation.
+- [ ] **GPS Kalman Filter**: Refine the vertical velocity model to better handle spurious lock losses.
+- [ ] **CPU Utilization Fix**: Improve individual task reporting accuracy by subtracting interrupt time (Low priority).
 
 ## Long-Term Vision
 

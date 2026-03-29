@@ -2,6 +2,33 @@
 
 This crate provides the core "Operating System" abstractions for the `rocket_vR` firmware, specifically tailored for the RP2350 (Cortex-M33) dual-core architecture.
 
+## Requirements
+
+- **Architecture**: ARM Cortex-M with Event Register support (e.g., RP2350, RP2040).
+- **Linker Configuration**: Requires a `.uninit` section in the linker script to support persistent panic records across reboots.
+- **Hardware**: Uses RP-specific peripherals (`SIO`, `FIFO`, `CPUID`) for dual-core synchronization and crash detection.
+- **Critical Section**: Requires a `critical-section` implementation (e.g., `embassy-rp`) for atomic operations.
+- **Global Blackboard**: Depends on `rocket-core` for shared data structures and health types.
+
+## System Engineering Requirements
+
+Determining the success of the `rocket-os` layer involves verifying these core functional and performance requirements:
+
+1.  **Deterministic Idle Monitoring**: The executor MUST accurately sample CPU idle cycles to provide utilization metrics with at least 0.1% resolution.
+2.  **Dual-Core Isolation**: Wakeup signals MUST be targeted; an event on Core 0 MUST NOT cause a spurious wakeup/poll cycle on Core 1 if no tasks are pending.
+3.  **Panic Persistence**: On a system crash (Panic or HardFault), the OS MUST preserve the failure location (file/line) and message in RAM that survives a warm reset.
+4.  **Hardware-Level Alarms**: Crash detection MUST NOT rely on high-level software; it MUST use hardware primitives (SIO FIFO) to ensure core-to-core signaling even if the memory bus is congested.
+5.  **Stack Safety**: The OS MUST provide a mechanism to "paint" and "scan" stack memory to detect high-watermarks for both cores during runtime.
+6.  **Zero-Noise Idle**: At 0% load, the instrumented executor MUST NOT exceed 1% apparent CPU utilization due to internal overhead or spurious wakeups.
+
+## Known Limitations
+
+### Task-Level Over-Reporting
+Individual task utilization (via `TrackedFuture`) currently includes time spent in high-priority interrupts that fire during a task's poll cycle.
+- **Impact**: Task-level stats are slightly overstated when interrupts are frequent.
+- **Accuracy**: Core-level totals (Core 0/1 Total, HP, BG) are unaffected as they use a separate differential calculation to subtract interrupt time.
+- **Mitigation**: Future update to `TrackedFuture` will subtract `INTERRUPT_ACTIVE_TICKS` from individual poll cycles.
+
 ## Features
 
 ### 1. Instrumented Embassy Executor
