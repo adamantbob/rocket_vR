@@ -2,6 +2,22 @@
 
 This crate is the "brain" of the `rocket_vR` firmware. It defines the shared data structures, health monitoring types, and the high-level flight state machine that coordinate all other modules.
 
+## Technical Stack & Design
+
+| Category | Implementation | Benefit |
+| :--- | :--- | :--- |
+| **Concurrency** | `CriticalSectionRawMutex` + `DataCell` | Race-free, non-blocking shared state. |
+| **Arithmetic** | Fixed-point `fixed` crate + `DeciPercent` | 100% deterministic flight logic across any MCU. |
+| **Memory** | `no_std`, zero-allocation, stack-only | No heap fragmentation or OOM panics in flight. |
+| **Communication** | Asynchronous `Channel` + CSV Schema | High-throughput telemetry without impacting CPU. |
+| **Logic** | Decoupled Flight State Machine | Hardware-agnostic logic, easy to test in SITL. |
+| **Observability** | Triple-Dispatch Shadow Macros | Simultaneous RTT (live) and SD (post-flight) logs. |
+
+---
+
+> [!TIP]
+> **Pro-Tip**: Use `local_info!` for high-frequency logs (e.g., control loop status) and `info!` for mission-critical events (e.g., parachute deployment) to optimize SD card longevity and buffer usage.
+
 ## Requirements
 
 - **Architecture**: Architecture-agnostic (pure Rust `no_std`).
@@ -134,10 +150,3 @@ graph TD
 - **Standard Macros**: `info!`, `warn!`, `error!` — Dispatched to **all** sinks (RTT + Log + SD).
 - **Local Macros**: `local_info!`, `local_warn!`, `local_error!` — Dispatched only to **live** sinks (RTT + Log). Use these for high-frequency or transient debugging.
 - **`log_to_sd!`**: An internal macro that handles formatting into a stack-allocated string buffer. If the telemetry channel is full, the log is dropped and the global `DROPPING_LOGS` counter is incremented.
-
-## Features
-
-- **Fixed-Point Health**: `DeciPercent` (0.1% resolution) used for CPU and sensor health tracking.
-- **Robust Logging**: Internal log channel (`Loggable`) with different tags for system, radio, and error events.
-- **Kalman Filtering**: 1D vertical Kalman filter for altitude/velocity estimation based on barometer and acceleration data.
-- **Flight State Machine**: High-level states (Launch, Ascent, Descent) driven by sensor data stored in the blackboard.
