@@ -73,6 +73,68 @@ sequenceDiagram
     Note over C: Exit Critical Section
 ```
 
+### 3. Logging & Telemetry
+A high-throughput, asynchronous logging pipeline designed for flight data persistence.
+
+#### The Pipeline
+Drivers and tasks act as **Producers**, asynchronously sending `LogEntry` items to a centralized **Global Channel**. The `SdLogger` task acts as the **Consumer**, draining the channel and flushing it to the SD card.
+
+```mermaid
+graph LR
+    subgraph Producers
+        IMU[IMU Task]
+        GPS[GPS Task]
+        SM[State Machine]
+    end
+
+    subgraph "Core (rocket-core)"
+        LC[("LOG_CHANNEL (128 Items)")]
+    end
+
+    subgraph "Consumer (rocket-drivers)"
+        SDL[SdLogger Task]
+        BUF[LogBuffer (512B)]
+        SD[(SD Card)]
+    end
+
+    IMU -->|try_send| LC
+    GPS -->|try_send| LC
+    SM  -->|try_send| LC
+
+    LC -->|drain| SDL
+    SDL -->|format CSV| BUF
+    BUF -->|block-aligned write| SD
+```
+
+#### CSV Schema & Headers
+To minimize storage and processing overhead, logs are stored as raw ASCII/CSV rows. Every log file (e.g., `LOG_001.CSV`) begins with a **Metadata Header** that defines the sampling rate (`TICK_HZ`) and the schema for every tag (e.g., `I`, `G`, `CPUH`).
+
+- **Format**: `TAG,TIMESTAMP,PAYLOAD...`
+- **Example**: `I,12345,1.2,0.5,-9.8` (IMU data at tick 12345)
+- **Dropped Logs**: If the channel fills up, a global `DROPPED_LOGS` counter is incremented and reported in the periodic `LoggerHealth` entries.
+
+### 4. Invisible Logging Macros
+The project shadows standard Rust logging macros (`info!`, `warn!`, `error!`) to provide "invisible" persistence. When you call `info!("System Ready")`, the data is automatically dispatched to multiple sinks.
+
+#### Triple Dispatch Model
+A single macro call sends data to RTT for live debugging and the SD card for post-flight analysis simultaneously.
+
+```mermaid
+graph TD
+    User[Code: info! 'Hello'] --> Macro{Custom Macro}
+    
+    Macro -->|Dispatch 1| RTT[::defmt::info!]
+    Macro -->|Dispatch 2| STD[::log::info!]
+    Macro -->|Dispatch 3| SD[log_to_sd!]
+    
+    SD -->|format to stack| BUF[heapless::String<32>]
+    BUF -->|try_send| LC[LOG_CHANNEL]
+```
+
+- **Standard Macros**: `info!`, `warn!`, `error!` — Dispatched to **all** sinks (RTT + Log + SD).
+- **Local Macros**: `local_info!`, `local_warn!`, `local_error!` — Dispatched only to **live** sinks (RTT + Log). Use these for high-frequency or transient debugging.
+- **`log_to_sd!`**: An internal macro that handles formatting into a stack-allocated string buffer. If the telemetry channel is full, the log is dropped and the global `DROPPING_LOGS` counter is incremented.
+
 ## Features
 
 - **Fixed-Point Health**: `DeciPercent` (0.1% resolution) used for CPU and sensor health tracking.
