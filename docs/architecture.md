@@ -74,6 +74,7 @@ sequenceDiagram
         T->>B: Update SENSOR_DATA
         Note over B: Locked via Critical Section
         SM->>B: Read latest data
+        Note over SM: Processing & Pre-processing
         SM->>SM: Run logic (update)
         SM->>B: Update SYSTEM_HEALTH
     end
@@ -104,11 +105,10 @@ stateDiagram-v2
     
     note right of ApogeeReached
         Action: Deploy Parachutes
-    end
-    
+    end note
     note right of Coasting
         Action: Stage Next (if multi-stage)
-    end
+    end note
 ```
 
 ### Input Tasks (N)
