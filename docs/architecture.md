@@ -7,8 +7,8 @@ This document details the internal workings, timing constraints, and task struct
 ```mermaid
 graph TD
     subgraph "Flight Hardware (RP2350)"
-        Core0["Core 0 (I/O & Background)"]
-        Core1["Core 1 (Flight Logic)"]
+        Core0["Core 0 (Flight Logic)"]
+        Core1["Core 1 (I/O & Background)"]
         SENSORS["Sensors (IMU, GPS)"]
         RADIO["Radio (LoRa)"]
         FLASH["Flash Storage"]
@@ -25,10 +25,10 @@ graph TD
         BRIDGE["SITL Bridge"]
     end
 
-    SENSORS --> Core0
-    Core0 <--> Core1
-    Core1 --> RADIO
-    Core1 --> FLASH
+    SENSORS --> Core1
+    Core1 <--> Core0
+    Core0 --> RADIO
+    Core0 --> FLASH
     RADIO -.-> BASE_RADIO
     BASE_RADIO --> BASE_MCU
     BASE_MCU --> SERIAL

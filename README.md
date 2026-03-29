@@ -1,16 +1,18 @@
 # rocket_vR
 
+![rocket_vR Banner](assets/rocket_vr_banner.png)
+
 An embassy-based Rust firmware for the Raspberry Pi Pico 2 W (RP2350) and RP2040.
 
-`rocket_vR` is a flight control system designed for high-reliability Model Rocketry. It leverages the [Embassy](https://embassy.dev/) async framework to provide efficient task management, low power consumption, and deterministic timing on the RP2350 microcontroller.
+`rocket_vR` is a flight control system designed for high-reliability Model Rocketry. It leverages the [Embassy](https://embassy.dev/) async framework to provide efficient task management, low power consumption, and deterministic timing.
 
-## Key Features
+## 🚀 Key Features
 
-- **Dual-Core Isolation**: Separates critical flight logic from background tasks.
-- **100Hz Control Loop**: Prioritized task execution with data staleness monitoring.
-- **Robust Panic Handling**: Cross-core monitoring and post-mortem reporting in persistent RAM.
-- **Integrated Telemetry**: LoRa-based telemetry combined with on-chip logging.
-- **SITL Support**: Software-in-the-Loop bridge for testing in Kerbal Space Program.
+- **🛡️ Dual-Core Isolation**: Critical flight logic is strictly isolated to Core 0, while I/O and background tasks run on Core 1.
+- **⏱️ 100Hz Control Loop**: Prioritized task execution with precision-locked timing and automated data staleness detection.
+- **🧠 Robust Panic Recovery**: Bi-directional cross-core monitoring and post-mortem crash reporting using persistent `.uninit` RAM.
+- **📡 Integrated Telemetry**: 915MHz LoRa-based telemetry combined with an asynchronous, block-aligned SD card logging pipeline.
+- **🎮 SITL-Ready**: High-fidelity Software-in-the-Loop bridge for real-time testing in **Kerbal Space Program**.
 
 ## Getting Started
 
@@ -49,16 +51,46 @@ cargo build-pico   # Build only
 - **`base-station/`**: Firmware for the ground station receiver.
 - **`rocket-sitl-ksp/`**: SITL bridge for Kerbal Space Program.
 
+## 🏗️ High-Level System Architecture
+
+```mermaid
+graph LR
+    subgraph "Rocket (RP2350)"
+        CORE0[Core 0: Flight Logic]
+        CORE1[Core 1: I/O & Comm]
+        SENSORS[Sensors IMU/GPS]
+        SD[SD Card Log]
+        
+        SENSORS --> CORE0
+        CORE0 <--> CORE1
+        CORE1 --> SD
+    end
+
+    subgraph "Ground"
+        BASE[Base Station RP2040]
+        GCS[Laptop / SITL Bridge]
+        
+        CORE0 -.->|LoRa| BASE
+        BASE -->|USB| GCS
+    end
+    
+    subgraph "Simulation"
+        KSP[Kerbal Space Program]
+        GCS <-->|kRPC| KSP
+    end
+```
+
 ## Documentation
 
 For more in-depth information, please refer to the following guides:
 
-- [**Architecture & Design**](docs/architecture.md): Timing models, task types, and panic handling.
-- [**Hardware & Wiring**](docs/hardware.md): Bill of Materials (BOM) and pin assignments.
-- [**The Brain (rocket-core)**](rocket-core/README.md): Blackboard pattern and flight logic.
-- [**Peripheral Drivers (rocket-drivers)**](rocket-drivers/README.md): Sensor drivers and bus management.
-- [**OS Layer (rocket-os)**](rocket-os/README.md): Instrumented executor and health monitoring.
-- [**Troubleshooting**](docs/troubleshooting.md): Common issues and solutions.
+- [**🚀 SITL Quick-Start Guide**](docs/sitl_guide.md): Get up and running with Kerbal Space Program simulations.
+- [**🏗️ Architecture & Design**](docs/architecture.md): Timing models, task types, and panic handling.
+- [**🔌 Hardware & Wiring**](docs/hardware.md): Bill of Materials (BOM) and pin assignments.
+- [**🧠 The Brain (rocket-core)**](rocket-core/README.md): Blackboard pattern and flight logic.
+- [**📦 Peripheral Drivers (rocket-drivers)**](rocket-drivers/README.md): Sensor drivers and bus management.
+- [**🛠️ OS Layer (rocket-os)**](rocket-os/README.md): Instrumented executor and health monitoring.
+- [**❓ Troubleshooting**](docs/troubleshooting.md): Common issues and solutions.
 
 ## License
 

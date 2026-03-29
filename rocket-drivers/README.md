@@ -40,7 +40,7 @@ The driver module must satisfy the following design goals:
 The SD Card driver (using `embedded-sdmmc`) is currently **synchronous/blocking**.
 - **Impact**: When the `SdLogger` flushes its buffer to the SD card (every 5 seconds or 512 bytes), it will block its executor for the duration of the SPI transfer (typically 5-50ms).
 - **Risk**: If the SD card task shares a core with the high-priority IMU sampling task, it may cause jitter in the sampling frequency.
-- **Mitigation**: The SD card task SHOULD be assigned to Core 1, while the high-priority control loop remains on Core 0.
+- **Mitigation**: The SD card task SHOULD be assigned to Core 0, while the high-priority control loop remains on Core 1.
 
 ### Hardware Anonymity Violations
 Some drivers currently hardcode specific RP2040/RP2350 peripherals, preventing easy reuse on alternative hardware configurations:
