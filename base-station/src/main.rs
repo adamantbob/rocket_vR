@@ -14,11 +14,12 @@ pub mod hardware;
 use rocket_core::utilization::METRICS_CORE0;
 use rocket_core::{define_utilization_tasks, spawn_tracked};
 use rocket_drivers::usb_and_repl_task;
-use rocket_os::InstrumentedExecutor;
+use rocket_os::utilization::stats_task;
+use rocket_os::{InstrumentedExecutor, stack};
 
 // --- Utilization Tracking ---
 // Matches the metrics pattern used in the main rocket crate.
-define_utilization_tasks!(BLINKY[0], RADIO_RX[0], USB[0]);
+define_utilization_tasks!(BLINKY[0], RADIO_RX[0], USB[0], STATS[0]);
 
 #[tracked_task]
 #[embassy_executor::task]
@@ -65,7 +66,8 @@ async fn radio_rx_task(
         >,
         embassy_rp::gpio::Output<'static>,
         embassy_rp::gpio::Input<'static>,
-    > = Rfm95::new(spi_dev, reset, dio0, config).await.unwrap();
+    > = Rfm95::new(spi_dev, reset, dio0, config).await;
+    radio.init().await.unwrap();
 
     loop {
         match radio
@@ -77,17 +79,29 @@ async fn radio_rx_task(
                 match radio_packet {
                     RadioPacket::TelemetryV1(packet) => {
                         log::info!(
-                            "RX [TELEMETRY V1]: Time={}s FS={} alt={}m rssi={} snr={} cpu={}",
+                            "RX [TELEMETRY V1]: Time={}s FS={} alt={}m cpu={} seq={} -- rssi={} snr={}",
                             packet.tickstamp_seconds_tenths as f32 / 10.0,
                             packet.flight_state,
                             packet.altitude_m,
+                            packet.cpu_utilization,
+                            packet.sequence,
                             quality.rssi_dbm,
                             quality.snr_db_tenths,
-                            packet.cpu_utilization,
                         );
                     }
                     RadioPacket::CommandV1(cmd) => {
                         log::info!("RX [COMMAND]: Received sequence {}", cmd.sequence);
+                    }
+                    RadioPacket::FullLocationV1(packet) => {
+                        log::info!(
+                            "RX [FULL LOCATION]: Time={}s Lat={} Lon={} Alt={}m rssi={} snr={}",
+                            packet.tickstamp_seconds_tenths as f32 / 10.0,
+                            packet.lat_1e7 as f32 / 1e7,
+                            packet.lon_1e7 as f32 / 1e7,
+                            packet.altitude_m,
+                            quality.rssi_dbm,
+                            quality.snr_db_tenths,
+                        );
                     }
                 }
             }
@@ -122,6 +136,12 @@ fn main() -> ! {
             &program,
         );
         let ws = NEOPIXEL.init(ws_driver);
+        let stack_addr = (core::ptr::null(), core::ptr::null());
+        spawn_tracked!(
+            spawner,
+            STATS,
+            stats_task(TASK_NAMES, TASK_CORES, stack_addr, false)
+        );
 
         // spawn_tracked! injects the TaskId argument added by #[tracked_task].
         spawn_tracked!(spawner, BLINKY, blinky(ws));

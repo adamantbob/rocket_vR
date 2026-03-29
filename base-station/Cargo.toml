@@ -3,9 +3,11 @@ name = "base-station"
 version = "0.1.0"
 edition = "2024"
 default-run = "base-station"
+verbose-utilization = []
 
 [features]
 rp2040 = ["embassy-rp/rp2040", "rocket-drivers/rp2040", "rocket-os/rp2040"]
+verbose-utilization = ["rocket-os/verbose-utilization"]
 
 [dependencies]
 embassy-embedded-hal = { git = "https://github.com/embassy-rs/embassy", features = [
