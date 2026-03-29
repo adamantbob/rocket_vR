@@ -32,6 +32,7 @@ The driver module must satisfy the following design goals:
 3.  **Deterministic Sampling**: Sensor sampling tasks SHOULD target a jitter of <1ms for 100Hz IMU loops.
 4.  **Automatic Recovery**: Drivers MUST attempt to recover (re-init) if a sensor reports persistent I/O errors.
 5.  **DMA Integrity**: Critical flight data (IMU) MUST use DMA to ensure no data is lost during high-priority interrupt bursts.
+6.  **Hardware Anonymity**: Drivers MUST be peripheral-agnostic. They SHOULD take generic instances (e.g., `<SPI: Instance>`) to allow reuse across different pinouts and hardware (Rocket vs. Base Station).
 
 ## Known Exceptions
 
@@ -41,7 +42,11 @@ The SD Card driver (using `embedded-sdmmc`) is currently **synchronous/blocking*
 - **Risk**: If the SD card task shares a core with the high-priority IMU sampling task, it may cause jitter in the sampling frequency.
 - **Mitigation**: The SD card task SHOULD be assigned to Core 1, while the high-priority control loop remains on Core 0.
 
-## Key Architectures
+### Hardware Anonymity Violations
+Some drivers currently hardcode specific RP2040/RP2350 peripherals, preventing easy reuse on alternative hardware configurations:
+- **Radio Driver**: Hardcoded to `SPI1`.
+- **SD Card Driver**: Hardcoded to `SPI0`.
+- **Mitigation**: These should be refactored to use generic `<SPI: Instance>` parameters, identical to the pattern used in `imu_task_driver`.
 
 ### 1. Driver Task Flow
 Drivers operate as independent tasks. They sample hardware at a configured frequency and "push" the results into the **Global Blackboard**.

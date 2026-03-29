@@ -28,6 +28,7 @@ Comprehensive verification of the system requirements is a high-priority goal fo
 - [ ] **Hardware-in-the-Loop (HIL)**: Develop a test runner for the Picosystem that verifies non-deterministic behaviors like `rocket-os` panic persistence and core isolation.
 - [ ] **Architecture Linting**: Integrate `cargo-deny` or custom linting to enforce the "Blackboard-only" communication boundary.
 - [ ] **Stack Use Profiling**: Implement automated CI tests that trigger the "stack painting" and scanning logic to detect potential overflows.
+- [ ] **Driver Anonymity Refactor**: Generalize the Radio and SD Card drivers to use generic peripherals (e.g., `<SPI: Instance>`) to enable cross-hardware reuse.
 
 ## Long-Term Vision
 
