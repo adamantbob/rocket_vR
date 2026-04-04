@@ -1,0 +1,17 @@
+z_arm_reset+0x6 (guessed) 2
+z_arm_reset+0x6 (guessed);soc_reset_hook (entry) 8
+z_arm_bus_fault (entry);z_arm_fault (entry) 20
+z_arm_bus_fault (entry);z_arm_fault (entry);printk (entry) 2
+z_arm_bus_fault (entry);z_arm_fault (entry);printk (entry);vprintk (entry) 6
+z_arm_bus_fault (entry);z_arm_fault (entry);printk (entry);vprintk (entry);memset (entry) 76
+z_arm_bus_fault (entry);z_arm_fault (entry);printk (entry);vprintk (entry) 1
+z_arm_bus_fault (entry);z_arm_fault (entry);printk (entry);vprintk (entry);vfprintf (entry) 23
+z_arm_bus_fault (entry);z_arm_fault (entry);printk (entry);vprintk (entry);vfprintf (entry);char_out (entry) 6
+ 3
+ 1
+ 1
+ 1
+ 1
+ 1
+ 1
+ 1

@@ -1,0 +1,16 @@
+21:10:33.1190 [INFO] Downloading https://zephyr-dashboard.renode.io/zephyr/492dc2f950ee9a6a84f14cfc4a28fcb2b18156e8/rpi_pico2_rp2350a_m33/hello_world/hello_world.elf.
+21:10:33.4532 [INFO] Download done.
+21:10:33.5097 [INFO] System bus created.
+21:10:35.6116 [INFO] sysbus: Loading block of 16696 bytes length at 0x10000000.
+21:10:35.6223 [INFO] sysbus: Loading block of 116 bytes length at 0x10004138.
+21:10:35.6227 [INFO] sysbus: Loading block of 4 bytes length at 0x100041AC.
+21:10:35.6233 [INFO] sysbus: Loading block of 3912 bytes length at 0x20000078.
+21:10:35.6721 [INFO] cpu0: Symbol 'CONFIG_TICKLESS_KERNEL' detected in the binary is known to affect the Zephyr Mode. You may want to disable it if you experience issues with `cpu0 EnableZephyrMode "CONFIG_TICKLESS_KERNEL"`
+21:11:07.2438 [INFO] cpu0: Setting initial values: PC = 0x10000EA1, SP = 0x20000FC0.
+21:11:07.2469 [INFO] rpi_pico2_rp2350a_m33: Machine started.
+21:11:07.2594 [ERROR] uart0: Character cannot be received by UART; UARTEN is disabled!
+21:11:07.2803 [ERROR] cpu0: read access to unsupported AArch32 32 bit system register cp:4 opc1:0 crn:0 crm:0 opc2:1 (privilege)
+21:11:07.2979 [WARNING] cpu0: Profiler: maximum nested contexts exceeded, disabling profiler
+21:11:22.2920 [ERROR] uart0: Character cannot be received by UART; UARTEN is disabled!
+21:15:51.6945 [INFO] rpi_pico2_rp2350a_m33: Machine paused.
+21:15:51.7227 [INFO] rpi_pico2_rp2350a_m33: Disposed.

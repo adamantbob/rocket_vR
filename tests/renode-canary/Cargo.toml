@@ -1,0 +1,13 @@
+[package]
+name = "renode-canary"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+cortex-m = "0.7.6"
+cortex-m-rt = "0.7.0"
+panic-halt = "0.2.0"
+embassy-rp = { git = "https://github.com/embassy-rs/embassy", default-features = false, features = [
+    "rp235xa",
+    "critical-section-impl",
+] }

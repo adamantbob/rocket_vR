@@ -1,0 +1,33 @@
+# Renode Script for rocket_vR RP2350 Simulation
+# Based on Antmicro verified RP2350 platform
+
+using sysbus
+mach create "rocket_vR"
+machine LoadPlatformDescription @tests/renode/pico2.repl
+
+# Enable logging for Core 0 and Core 1
+cpu0 LogFunctionNames true
+cpu1 LogFunctionNames true
+
+# Redirect UART0 (Main Console) to logging (terminal)
+showAnalyzer uart0 Antmicro.Renode.Analyzers.LoggingUartAnalyzer
+
+# Load the compiled firmware (ELF format)
+$bin?=@target/thumbv8m.main-none-eabihf/release/rocket
+
+macro reset
+"""
+    # Load the ELF file provided by the runner
+    sysbus LoadELF $bin
+    # Use the verified flash origin for the vector table
+    cpu0 VectorTableOffset 0x10000000
+    cpu1 IsHalted true
+    
+    # Pre-enable UART0 (UARTEN bit 0, TXE bit 8 in UARTCR at offset 0x30)
+    # This allows us to see output even if the driver hasn't finished init
+    sysbus WriteDoubleWord 0x40070030 0x101
+"""
+
+runMacro $reset
+
+echo "Renode: rocket_vR simulation ready. Type 'start' to begin."

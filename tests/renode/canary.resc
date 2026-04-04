@@ -1,0 +1,29 @@
+# Renode Script for Canary Verification
+# This script runs a minimalist binary that performs RAW UART writes
+
+using sysbus
+mach create "canary"
+machine LoadPlatformDescription @tests/renode/pico2.repl
+
+# Redirect UART0 to logging (terminal)
+showAnalyzer uart0 Antmicro.Renode.Analyzers.LoggingUartAnalyzer
+
+$bin?=@target/thumbv8m.main-none-eabihf/release/renode-canary
+
+macro reset
+"""
+    sysbus LoadELF $bin
+    # Standard RP2350 flash start
+    cpu0 VectorTableOffset 0x10000000
+    cpu1 IsHalted true
+    
+    # Pre-enable UART0 (UARTEN bit 0, TXE bit 8 in UARTCR at offset 0x30)
+    # This allows the raw canary to print without a full driver
+    sysbus WriteDoubleWord 0x40070030 0x101
+"""
+
+runMacro $reset
+
+echo "Renode: Canary simulation starting (Auto-quit in 2s)..."
+emulation RunFor "00:00:02"
+quit

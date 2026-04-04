@@ -1,0 +1,52 @@
+// RP2350 (Pico 2) Platform file for rocket_vR
+// Optimized for Embassy/Rust early boot
+
+sysbus:
+    init:
+        // Use Tags for non-critical peripherals
+        Tag <0x50000000 0x10000> "dma"
+        Tag <0x50110000 0x10000> "usbd"
+        Tag <0x50200000 0x1000> "pio0"
+        Tag <0x50300000 0x1000> "pio1"
+        Tag <0x50400000 0x1000> "pio2"
+
+// Use actual memory for polled peripherals to allow write-then-read checks
+psm_clocks_mem: Memory.MappedMemory @ sysbus 0x40000000
+    size: 0x40000  // Cover most APB peripherals (including 0x40018000)
+
+sio_mem: Memory.MappedMemory @ sysbus 0xd0000000
+    size: 0x1000   // Cover SIO registers (including 0xd000017c)
+
+flash0: Memory.MappedMemory @ sysbus 0x10000000
+    size: 0x400000
+
+sram0: Memory.MappedMemory @ sysbus 0x20000000
+    size: 0x82000
+
+cpu0: CPU.CortexM @ sysbus
+    cpuType: "cortex-m33"
+    nvic: nvic0
+    id: 0
+
+nvic0: IRQControllers.NVIC @ {
+    sysbus new Bus.BusPointRegistration { address: 0xe000e000; cpu: cpu0 }
+}
+    -> cpu0@0
+    systickFrequency: 150000000
+
+cpu1: CPU.CortexM @ sysbus
+    cpuType: "cortex-m33"
+    nvic: nvic1
+    id: 1
+
+nvic1: IRQControllers.NVIC @ {
+    sysbus new Bus.BusPointRegistration { address: 0xe000e000; cpu: cpu1 }
+}
+    -> cpu1@0
+    systickFrequency: 150000000
+
+uart0: UART.PL011 @ sysbus 0x40070000
+    ->nvic0@33
+
+uart1: UART.PL011 @ sysbus 0x40078000
+    ->nvic0@34

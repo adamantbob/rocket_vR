@@ -5,6 +5,7 @@ members = [
     "proc-macros",
     "rocket-sitl-ksp",
     "base-station",
+    "tests/renode-canary",
 ]
 resolver = "2"
 

@@ -1,5 +1,6 @@
 [target.thumbv8m.main-none-eabihf]
 runner = "probe-rs run --chip RP235x"
+rustflags = ["-C", "link-arg=-Tlink.x"]
 # runner = "elf2uf2-rs -d" # For building Click & Drag UF2 files
 
 [target.thumbv6m-none-eabi]
@@ -16,6 +17,28 @@ uf2-pico2 = "run -p rocket_vR --target thumbv8m.main-none-eabihf --features rp23
 run-base = "run -p base-station --target thumbv6m-none-eabi --features rp2040"
 build-base = "build -p base-station --target thumbv6m-none-eabi --features rp2040"
 uf2-base = "run -p base-station --target thumbv6m-none-eabi --features rp2040 --config target.thumbv6m-none-eabi.runner='elf2uf2-rs'"
+
+# Renode Simulation Aliases
+sim-canary = [
+    "run",
+    "-p",
+    "renode-canary",
+    "--target",
+    "thumbv8m.main-none-eabihf",
+    "--config",
+    "target.thumbv8m.main-none-eabihf.runner='powershell -ExecutionPolicy Bypass -File scripts/renode-runner.ps1 -RescPath tests/renode/canary.resc -BinaryPath'",
+]
+sim-rocket = [
+    "run",
+    "-p",
+    "rocket_vR",
+    "--target",
+    "thumbv8m.main-none-eabihf",
+    "--features",
+    "rp2350",
+    "--config",
+    "target.thumbv8m.main-none-eabihf.runner='powershell -ExecutionPolicy Bypass -File scripts/renode-runner.ps1 -RescPath tests/renode/rocket.resc -BinaryPath'",
+]
 
 [build]
 

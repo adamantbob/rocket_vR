@@ -10,12 +10,12 @@ This document outlines the current status of the `rocket_vR` project and the pla
 - [x] **Panic Monitoring**: Cross-core heartbeats and persistent crash logs.
 - [x] **Base Station**: Telemetry reception and LoRa link management.
 - [x] **SITL Bridge**: Kerbal Space Program integration for dry-run testing.
+- [x] **SD Logging**: Mirror all telemetry to an onboard microSD card for post-flight analysis.
 
 ## Near-Term Goals (Next 1-2 Months)
 - [ ] **State Machine Revision**: Add more sensor data to the state machine and refine the state transitions.
 - [ ] **Automated UF2 Generation**: Integrate `elf2uf2-rs` into the `cargo build` process for one-click manual loading.
 - [ ] **Command Uplink**: Implement a task on the rocket to receive and handle commands from the base station.
-- [ ] **SD Logging**: Mirror all telemetry to an onboard microSD card for post-flight analysis.
 - [ ] **GPS Optimization**: Further refinement of the Kalmann filtering for altitude estimation.
 - [ ] **GPS Kalman Filter**: Refine the vertical velocity model to better handle spurious lock losses.
 - [ ] **CPU Utilization Fix**: Improve individual task reporting accuracy by subtracting interrupt time (Low priority).
