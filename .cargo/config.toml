@@ -1,6 +1,5 @@
 [target.thumbv8m.main-none-eabihf]
 runner = "probe-rs run --chip RP235x"
-rustflags = ["-C", "link-arg=-Tlink.x"]
 # runner = "elf2uf2-rs -d" # For building Click & Drag UF2 files
 
 [target.thumbv6m-none-eabi]
