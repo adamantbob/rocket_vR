@@ -1,6 +1,7 @@
 [workspace]
 members = [
     "rocket",
+    "proto-rocket",
     "rocket-core",
     "proc-macros",
     "rocket-sitl-ksp",

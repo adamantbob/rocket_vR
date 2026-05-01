@@ -1,10 +1,11 @@
 [package]
-name = "rocket_vR"
+name = "proto_rocket_vR"
 version = "0.1.0"
 edition = "2024"
-default-run = "rocket_vR"
+default-run = "proto_rocket_vR"
 
 [features]
+rp2040 = ["embassy-rp/rp2040", "rocket-os/rp2040", "rocket-drivers/rp2040"]
 rp2350 = ["embassy-rp/rp235xa", "rocket-os/rp2350", "rocket-drivers/rp2350"]
 verbose-utilization = ["rocket-os/verbose-utilization"]
 debug-imu = ["rocket-drivers/debug-imu"]
@@ -104,7 +105,7 @@ lto = true
 opt-level = 'z'
 
 [[bin]]
-name = "rocket_vR"
+name = "proto_rocket_vR"
 path = "src/main.rs"
 
 [target.'cfg(target_arch = "arm")'.dependencies]
